@@ -13,19 +13,25 @@ const GENERATED_GAS_CODE = `/**
 
 function setupAllTables() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ['Users', 'Classes', 'Materials', 'Quizzes', 'QuizResults', 'Attendance', 'Forum'];
+  const sheets = {
+    'Users': ['id', 'role', 'name', 'username', 'nik', 'nisn', 'classId', 'password'],
+    'Materials': ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt'],
+    'Quizzes': ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'createdAt'],
+    'QuizResults': ['id', 'quizId', 'studentId', 'score', 'submittedAt'],
+    'Assignments': ['studentId', 'materialId', 'link', 'submittedAt'],
+    'StudentProgress': ['studentId', 'materialId', 'readAt']
+  };
   
-  sheets.forEach(name => {
+  for (const [name, headers] of Object.entries(sheets)) {
     let sheet = ss.getSheetByName(name);
     if (!sheet) {
       sheet = ss.insertSheet(name);
     }
     // Add headers if empty
     if (sheet.getLastRow() === 0) {
-      if (name === 'Users') sheet.appendRow(['id', 'role', 'name', 'username', 'nik', 'nisn', 'classId', 'password']);
-      // Add other headers as needed...
+      sheet.appendRow(headers);
     }
-  });
+  }
   
   initSuperAdminScriptProperties();
   return "Setup Complete & Tables Generated";
@@ -37,20 +43,28 @@ function initSuperAdminScriptProperties() {
   props.setProperty('SUPER_ADMIN_PASSWORD', 'Asepst007@');
 }
 
+function findRowIndex(sheet, idColIndex, idVal) {
+  if (!sheet) return -1;
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][idColIndex] === idVal) return i + 1;
+  }
+  return -1;
+}
+
 function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     const action = data.action;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
     
     if (action === 'ping') {
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'pong' }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'pong' })).setMimeType(ContentService.MimeType.JSON);
     }
 
     if (action === 'setupAllTables') {
       const result = setupAllTables();
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: result }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: result })).setMimeType(ContentService.MimeType.JSON);
     }
     
     // Auth Check
@@ -66,14 +80,12 @@ function doPost(e) {
           })).setMimeType(ContentService.MimeType.JSON);
         }
         
-        // Cek sheet Users untuk guru/admin lain (disini hanya contoh kerangka)
-        const ss = SpreadsheetApp.getActiveSpreadsheet();
         const userSheet = ss.getSheetByName('Users');
         if (userSheet) {
           const rows = userSheet.getDataRange().getValues();
           for (let i = 1; i < rows.length; i++) {
             const [id, rRole, name, username, nik, nisn, classId, pass] = rows[i];
-            if ((identifier === username || identifier === nik) && password === pass && (rRole === 'TEACHER' || rRole === 'ADMIN')) {
+            if ((identifier === username || identifier === nik) && password === String(pass) && (rRole === 'TEACHER' || rRole === 'ADMIN')) {
               return ContentService.createTextOutput(JSON.stringify({ 
                 success: true, 
                 user: { id, role: rRole, name, username, nik } 
@@ -82,13 +94,12 @@ function doPost(e) {
           }
         }
       } else if (role === 'student') {
-        const ss = SpreadsheetApp.getActiveSpreadsheet();
         const userSheet = ss.getSheetByName('Users');
         if (userSheet) {
           const rows = userSheet.getDataRange().getValues();
           for (let i = 1; i < rows.length; i++) {
             const [id, rRole, name, username, nik, nisn, classId, pass] = rows[i];
-            if (identifier === nisn && password === pass && rRole === 'STUDENT') {
+            if (String(identifier) === String(nisn) && String(password) === String(pass) && rRole === 'STUDENT') {
               return ContentService.createTextOutput(JSON.stringify({ 
                 success: true, 
                 user: { id, role: rRole, name, nisn, classId } 
@@ -97,24 +108,92 @@ function doPost(e) {
           }
         }
       }
-      
-      return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Kredensial tidak valid' }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Kredensial tidak valid' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // CRUD Handlers
+    if (action === 'addUser') {
+      const u = data.user;
+      const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
+      ss.getSheetByName('Users').appendRow([u.id, u.role, u.name, u.username || '', u.nik || '', u.nisn || '', u.classId || '', pass]);
+    } 
+    else if (action === 'updateUser') {
+      const sheet = ss.getSheetByName('Users');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) {
+        const u = data.data;
+        if (u.name) sheet.getRange(rowIdx, 3).setValue(u.name);
+        if (u.username) sheet.getRange(rowIdx, 4).setValue(u.username);
+        if (u.nik) sheet.getRange(rowIdx, 5).setValue(u.nik);
+        if (u.nisn) sheet.getRange(rowIdx, 6).setValue(u.nisn);
+        if (u.classId) sheet.getRange(rowIdx, 7).setValue(u.classId);
+      }
+    }
+    else if (action === 'deleteUser') {
+      const sheet = ss.getSheetByName('Users');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) sheet.deleteRow(rowIdx);
+    }
+    else if (action === 'resetPassword') {
+      const sheet = ss.getSheetByName('Users');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) sheet.getRange(rowIdx, 8).setValue(data.password);
+    }
+    else if (action === 'addMaterial') {
+      const m = data.material;
+      const url = m.pdfUrl || m.youtubeUrl || m.linkUrl || '';
+      ss.getSheetByName('Materials').appendRow([m.id, m.classId, m.subjectId, m.teacherId, m.title, m.content || '', m.type, url, m.chapter, m.order, m.semester, m.createdAt]);
+    }
+    else if (action === 'updateMaterial') {
+      const sheet = ss.getSheetByName('Materials');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) {
+        const m = data.data;
+        if (m.title) sheet.getRange(rowIdx, 5).setValue(m.title);
+        if (m.content) sheet.getRange(rowIdx, 6).setValue(m.content);
+        if (m.type) sheet.getRange(rowIdx, 7).setValue(m.type);
+        if (m.order) sheet.getRange(rowIdx, 10).setValue(m.order);
+      }
+    }
+    else if (action === 'deleteMaterial') {
+      const sheet = ss.getSheetByName('Materials');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) sheet.deleteRow(rowIdx);
+    }
+    else if (action === 'addQuiz') {
+      const q = data.quiz;
+      ss.getSheetByName('Quizzes').appendRow([q.id, q.materialId || '', q.classId || '', q.subjectId || '', q.title, q.durationMinutes, q.createdAt]);
+    }
+    else if (action === 'updateQuiz') {
+      const sheet = ss.getSheetByName('Quizzes');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) {
+        const q = data.data;
+        if (q.title) sheet.getRange(rowIdx, 5).setValue(q.title);
+        if (q.durationMinutes) sheet.getRange(rowIdx, 6).setValue(q.durationMinutes);
+      }
+    }
+    else if (action === 'deleteQuiz') {
+      const sheet = ss.getSheetByName('Quizzes');
+      const rowIdx = findRowIndex(sheet, 0, data.id);
+      if (rowIdx > -1) sheet.deleteRow(rowIdx);
+    }
+    else if (action === 'submitAssignment') {
+      ss.getSheetByName('Assignments').appendRow([data.studentId, data.materialId, data.link, new Date().toISOString()]);
+    }
+    else if (action === 'markMaterialAsRead') {
+      ss.getSheetByName('StudentProgress').appendRow([data.studentId, data.materialId, new Date().toISOString()]);
     }
     
-    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Action received' }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Action received and processed' })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
-    return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("SmartLMS Webhook Active")
-    .setMimeType(ContentService.MimeType.TEXT);
-}
-`;
+  return ContentService.createTextOutput("SmartLMS Webhook Active").setMimeType(ContentService.MimeType.TEXT);
+}`;
 
 export default function GASConfig() {
   const { webhookUrl, setWebhookUrl, testConnection, isConnected, executeAction } = useGasStore();

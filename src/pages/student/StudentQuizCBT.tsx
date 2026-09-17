@@ -76,8 +76,9 @@ export default function StudentQuizCBT() {
 
   if (isFinished) {
     // Mock calculate score
+    const qLen = MOCK_QUIZ.questions.length;
     const answeredCount = Object.keys(answers).length;
-    const score = Math.round((answeredCount / MOCK_QUIZ.questions.length) * 100);
+    const score = Math.round((answeredCount / qLen) * 100);
     
     return (
       <div className="max-w-2xl mx-auto mt-10">

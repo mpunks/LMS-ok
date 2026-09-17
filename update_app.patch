@@ -1,0 +1,45 @@
+--- src/App.tsx
++++ src/App.tsx
+@@ -1,6 +1,6 @@
+-import React from 'react';
++import React, { useEffect } from 'react';
+ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+ import { useAuthStore } from './store/authStore';
++import { useGasStore } from './store/gasStore';
+ import { ToastContainer } from './components/ui/Toast';
+ import { MainLayout } from './components/layout/MainLayout';
+ import LandingPage from './pages/LandingPage';
+@@ -13,6 +13,7 @@
+ import AdminUsers from './pages/admin/AdminUsers';
+ import AdminStudents from './pages/admin/AdminStudents';
++import AdminSettings from './pages/admin/AdminSettings';
+ 
+ // Teacher Pages
+ import TeacherDashboard from './pages/teacher/TeacherDashboard';
+@@ -43,6 +44,14 @@
+ }
+ 
+ export default function App() {
++  const { webhookUrl, testConnection } = useGasStore();
++
++  useEffect(() => {
++    if (webhookUrl) {
++      testConnection(); // Auto-ping on load
++    }
++  }, []);
++
+   return (
+     <BrowserRouter>
+       <Routes>
+@@ -66,6 +75,11 @@
+             <GASConfig />
+           </ProtectedRoute>
+         } />
++        <Route path="/admin/settings" element={
++          <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
++            <AdminSettings />
++          </ProtectedRoute>
++        } />
+ 
+         {/* Teacher Routes */}
+         <Route path="/teacher" element={

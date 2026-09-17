@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
+import { useGasStore } from './store/gasStore';
 import { ToastContainer } from './components/ui/Toast';
 import { MainLayout } from './components/layout/MainLayout';
 import LandingPage from './pages/LandingPage';
@@ -11,6 +12,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import GASConfig from './pages/admin/GASConfig';
 import AdminUsers from './pages/admin/AdminUsers';
 import AdminStudents from './pages/admin/AdminStudents';
+import AdminSettings from './pages/admin/AdminSettings';
 
 // Teacher Pages
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
@@ -42,6 +44,14 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
 }
 
 export default function App() {
+  const { webhookUrl, testConnection } = useGasStore();
+
+  useEffect(() => {
+    if (webhookUrl) {
+      testConnection();
+    }
+  }, []);
+
   return (
     <BrowserRouter>
       <Routes>
@@ -67,6 +77,11 @@ export default function App() {
         <Route path="/admin/gas" element={
           <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
             <GASConfig />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/settings" element={
+          <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            <AdminSettings />
           </ProtectedRoute>
         } />
 

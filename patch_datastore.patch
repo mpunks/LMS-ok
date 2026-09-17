@@ -1,0 +1,65 @@
+--- src/store/dataStore.ts
++++ src/store/dataStore.ts
+@@ -48,63 +48,63 @@
+ 
+       // Actions
+       addUser: async (user) => {
++        await syncToGas('addUser', { user });
+         set(state => ({ users: [...state.users, user] }));
+-        await syncToGas('addUser', { user });
+       },
+       updateUser: async (id, data) => {
++        await syncToGas('updateUser', { id, data });
+         set(state => ({ users: state.users.map(u => u.id === id ? { ...u, ...data } : u) }));
+-        await syncToGas('updateUser', { id, data });
+       },
+       deleteUser: async (id) => {
++        await syncToGas('deleteUser', { id });
+         set(state => ({ users: state.users.filter(u => u.id !== id) }));
+-        await syncToGas('deleteUser', { id });
+       },
+       resetPassword: async (id, defaultPassword) => {
+         await syncToGas('resetPassword', { id, password: defaultPassword });
+       },
+ 
+       addMaterial: async (material) => {
++        await syncToGas('addMaterial', { material });
+         set(state => ({ materials: [...state.materials, material] }));
+-        await syncToGas('addMaterial', { material });
+       },
+       updateMaterial: async (id, data) => {
++        await syncToGas('updateMaterial', { id, data });
+         set(state => ({ materials: state.materials.map(m => m.id === id ? { ...m, ...data } : m) }));
+-        await syncToGas('updateMaterial', { id, data });
+       },
+       deleteMaterial: async (id) => {
++        await syncToGas('deleteMaterial', { id });
+         set(state => ({ materials: state.materials.filter(m => m.id !== id) }));
+-        await syncToGas('deleteMaterial', { id });
+       },
+       markMaterialAsRead: async (studentId, materialId) => {
+         await syncToGas('markMaterialAsRead', { studentId, materialId });
+       },
+ 
+       addQuiz: async (quiz) => {
++        await syncToGas('addQuiz', { quiz });
+         set(state => ({ quizzes: [...state.quizzes, quiz] }));
+-        await syncToGas('addQuiz', { quiz });
+       },
+       updateQuiz: async (id, data) => {
++        await syncToGas('updateQuiz', { id, data });
+         set(state => ({ quizzes: state.quizzes.map(q => q.id === id ? { ...q, ...data } : q) }));
+-        await syncToGas('updateQuiz', { id, data });
+       },
+       deleteQuiz: async (id) => {
++        await syncToGas('deleteQuiz', { id });
+         set(state => ({ quizzes: state.quizzes.filter(q => q.id !== id) }));
+-        await syncToGas('deleteQuiz', { id });
+       },
+       submitQuiz: async (result) => {
++        await syncToGas('submitQuiz', { result });
+         set(state => ({ quizResults: [...state.quizResults, result] }));
+-        await syncToGas('submitQuiz', { result });
+       },
+       submitAssignment: async (studentId, materialId, link) => {
+         await syncToGas('submitAssignment', { studentId, materialId, link });

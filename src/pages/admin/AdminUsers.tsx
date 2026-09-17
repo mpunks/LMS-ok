@@ -5,37 +5,39 @@ import { Input } from '@/components/ui/Input';
 import { Users, Plus, Trash2, KeyRound, ShieldAlert } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useAuthStore } from '@/store/authStore';
-
-// Mock data
-const initialAdmins = [
-  { id: 'sa-1', name: 'Super Administrator', username: 'rafx2', role: 'SUPER_ADMIN' },
-  { id: 'a-1', name: 'Admin Sekolah 1', username: 'admin1', nik: '1234567890123456', role: 'ADMIN' },
-];
+import { useDataStore } from '@/store/dataStore';
 
 export default function AdminUsers() {
   const { user: currentUser } = useAuthStore();
-  const [admins, setAdmins] = useState(initialAdmins);
+  const { users, addUser, deleteUser, resetPassword } = useDataStore();
+  
+  const admins = users.filter(u => u.role === 'ADMIN' || u.role === 'SUPER_ADMIN');
+  
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ name: '', username: '', nik: '' });
 
-  const handleAddAdmin = (e: React.FormEvent) => {
+  const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name || !formData.username || !formData.nik) {
       toast.error('Semua kolom wajib diisi');
       return;
     }
-    const newAdmin = {
-      id: `a-${Date.now()}`,
-      ...formData,
-      role: 'ADMIN'
-    };
-    setAdmins([...admins, newAdmin]);
-    setFormData({ name: '', username: '', nik: '' });
-    setShowForm(false);
-    toast.success('Admin baru berhasil ditambahkan');
+    try {
+      const newAdmin = {
+        id: `a-${Date.now()}`,
+        ...formData,
+        role: 'ADMIN' as const
+      };
+      await addUser(newAdmin);
+      setFormData({ name: '', username: '', nik: '' });
+      setShowForm(false);
+      toast.success('Admin baru berhasil ditambahkan');
+    } catch (error: any) {
+      toast.error(error.message || 'Gagal menambahkan admin');
+    }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (id === currentUser?.id) {
       toast.error('Anda tidak dapat menghapus akun Anda sendiri saat sedang login');
       return;
@@ -51,17 +53,28 @@ export default function AdminUsers() {
       return;
     }
 
-    setAdmins(admins.filter(a => a.id !== id));
-    toast.success('Admin berhasil dihapus');
+    try {
+      await deleteUser(id);
+      toast.success('Admin berhasil dihapus');
+    } catch (error: any) {
+      toast.error(error.message || 'Gagal menghapus admin');
+    }
   };
 
-  const handleResetPassword = (id: string) => {
+  const handleResetPassword = async (id: string) => {
     const admin = admins.find(a => a.id === id);
     if (admin?.role === 'SUPER_ADMIN') {
       toast.error('Sandi Super Admin dikelola di Script Properties Google Apps Script');
       return;
     }
-    toast.info(`Sandi admin ${admin?.name} direset ke NIK default.`);
+    if (admin?.nik) {
+      try {
+        await resetPassword(id, admin.nik);
+        toast.info(`Sandi admin ${admin.name} direset ke NIK default.`);
+      } catch (error: any) {
+        toast.error(error.message || 'Gagal mereset kata sandi');
+      }
+    }
   };
 
   return (

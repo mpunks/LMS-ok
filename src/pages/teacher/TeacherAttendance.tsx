@@ -1,15 +1,36 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Calendar, Users, Save } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
+import { useDataStore } from '@/store/dataStore';
 
 export default function TeacherAttendance() {
+  const { users } = useDataStore();
+  const students = users.filter(u => u.role === 'STUDENT');
+  
+  const uniqueClasses = Array.from(new Set(students.map(s => s.classId).filter(Boolean)));
+  const [selectedClass, setSelectedClass] = useState(uniqueClasses[0] as string || '');
+  
+  const classStudents = students.filter(s => s.classId === selectedClass);
+  
+  // Local state for attendance for UI demo since we don't have an attendance table yet.
+  const [attendance, setAttendance] = useState<Record<string, string>>({});
+
+  const handleSave = () => {
+    toast.success('Data absensi berhasil disimpan');
+  };
+
+  const hadir = classStudents.filter(s => attendance[s.id] === 'HADIR' || !attendance[s.id]).length;
+  const sakit = classStudents.filter(s => attendance[s.id] === 'SAKIT').length;
+  const izin = classStudents.filter(s => attendance[s.id] === 'IZIN').length;
+  const alpa = classStudents.filter(s => attendance[s.id] === 'ALPA').length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-slate-900">Presensi Kehadiran</h1>
-        <Button className="gap-2" onClick={() => toast.success('Data absensi berhasil disimpan')}>
+        <Button className="gap-2" onClick={handleSave}>
           <Save className="w-4 h-4" /> Simpan Absensi
         </Button>
       </div>
@@ -20,18 +41,26 @@ export default function TeacherAttendance() {
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-slate-200">
                 <Calendar className="w-4 h-4 text-slate-400" />
-                <span className="text-sm font-medium text-slate-700">17 Sep 2026</span>
+                <span className="text-sm font-medium text-slate-700">{new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               </div>
-              <select className="border border-slate-300 rounded px-3 py-2 text-sm outline-none bg-white">
-                <option>Kelas 7A</option>
-                <option>Kelas 7B</option>
+              <select 
+                className="border border-slate-300 rounded px-3 py-2 text-sm outline-none bg-white"
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+              >
+                {uniqueClasses.length === 0 && (
+                  <option value="">Belum ada kelas</option>
+                )}
+                {uniqueClasses.map(c => (
+                  <option key={c as string} value={c as string}>Kelas {c}</option>
+                ))}
               </select>
             </div>
             <div className="flex items-center gap-4 text-sm font-medium">
-              <span className="text-emerald-600">Hadir: 28</span>
-              <span className="text-amber-600">Sakit: 1</span>
-              <span className="text-blue-600">Izin: 1</span>
-              <span className="text-rose-600">Alpa: 0</span>
+              <span className="text-emerald-600">Hadir: {hadir}</span>
+              <span className="text-amber-600">Sakit: {sakit}</span>
+              <span className="text-blue-600">Izin: {izin}</span>
+              <span className="text-rose-600">Alpa: {alpa}</span>
             </div>
           </div>
         </CardHeader>
@@ -46,12 +75,7 @@ export default function TeacherAttendance() {
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { id: '1', name: 'Andi Saputra', status: 'HADIR' },
-                  { id: '2', name: 'Budi Haryanto', status: 'SAKIT' },
-                  { id: '3', name: 'Citra Dewi', status: 'HADIR' },
-                  { id: '4', name: 'Deni Kurniawan', status: 'IZIN' },
-                ].map((student, idx) => (
+                {classStudents.map((student, idx) => (
                   <tr key={student.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                     <td className="px-6 py-4">{idx + 1}</td>
                     <td className="px-6 py-4 font-medium text-slate-900">{student.name}</td>
@@ -62,12 +86,13 @@ export default function TeacherAttendance() {
                             <input 
                               type="radio" 
                               name={`attendance-${student.id}`} 
-                              defaultChecked={student.status === status}
+                              checked={(attendance[student.id] || 'HADIR') === status}
+                              onChange={() => setAttendance(prev => ({ ...prev, [student.id]: status }))}
                               className="text-indigo-600 focus:ring-indigo-500"
                             />
                             <span className={`text-xs font-semibold ${
-                              status === 'HADIR' ? 'text-emerald-600' :
-                              status === 'SAKIT' ? 'text-amber-600' :
+                              status === 'HADIR' ? 'text-emerald-600' : 
+                              status === 'SAKIT' ? 'text-amber-600' : 
                               status === 'IZIN' ? 'text-blue-600' : 'text-rose-600'
                             }`}>{status.charAt(0)}</span>
                           </label>
@@ -76,6 +101,13 @@ export default function TeacherAttendance() {
                     </td>
                   </tr>
                 ))}
+                {classStudents.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-6 py-8 text-center text-slate-500">
+                      Siswa tidak ditemukan untuk kelas ini.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

@@ -30,16 +30,21 @@ export interface Material {
   teacherId: string;
   title: string;
   content: string; // Rich text / markdown
+  type: 'PDF' | 'VIDEO' | 'LINK' | 'HTML';
   youtubeUrl?: string;
   pdfUrl?: string;
+  linkUrl?: string;
   createdAt: string;
   semester: number;
   chapter: string;
+  order: number; // For sequential learning
 }
 
 export interface Quiz {
   id: string;
   materialId: string;
+  classId: string;
+  subjectId: string;
   title: string;
   durationMinutes: number;
   questions: Question[];

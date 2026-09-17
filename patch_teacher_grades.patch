@@ -1,0 +1,111 @@
+--- src/pages/teacher/TeacherGrades.tsx
++++ src/pages/teacher/TeacherGrades.tsx
+@@ -10,13 +10,17 @@
+ 
+ export default function TeacherGrades() {
+-  const { users } = useDataStore();
++  const { users, quizResults } = useDataStore();
+   const students = users.filter(u => u.role === 'STUDENT');
+-  const [selectedClass, setSelectedClass] = useState('7A');
++  const [selectedClass, setSelectedClass] = useState('');
+   const [search, setSearch] = useState('');
+ 
+   // Ambil kelas unik dari siswa
+   const uniqueClasses = Array.from(new Set(students.map(s => s.classId).filter(Boolean)));
+ 
+   // Default fallback if no class
+-  if (uniqueClasses.length > 0 && !uniqueClasses.includes(selectedClass)) {
++  if (uniqueClasses.length > 0 && (!selectedClass || !uniqueClasses.includes(selectedClass))) {
+     setSelectedClass(uniqueClasses[0] as string);
+   }
+ 
+   const classStudents = students.filter(s => s.classId === selectedClass && s.name.toLowerCase().includes(search.toLowerCase()));
+ 
++  const getStudentAverage = (studentId: string) => {
++    const results = quizResults.filter(r => r.studentId === studentId);
++    if (results.length === 0) return 0;
++    return results.reduce((acc, curr) => acc + curr.score, 0) / results.length;
++  };
++
++  const classAverage = classStudents.length > 0 
++    ? (classStudents.reduce((acc, curr) => acc + getStudentAverage(curr.id), 0) / classStudents.length).toFixed(1)
++    : '0';
++
++  const highestScore = classStudents.length > 0
++    ? Math.max(...classStudents.map(s => getStudentAverage(s.id))).toFixed(1)
++    : '0';
++
++  const passedKKM = classStudents.length > 0
++    ? Math.round((classStudents.filter(s => getStudentAverage(s.id) >= 75).length / classStudents.length) * 100)
++    : 0;
++
+   return (
+     <div className="space-y-6">
+@@ -28,14 +32,14 @@
+       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+         <Card className="bg-indigo-600 text-white border-transparent">
+           <CardContent className="p-6">
+-            <h3 className="text-indigo-100 text-sm font-medium mb-1">Rata-rata Kelas {selectedClass}</h3>
+-            <p className="text-3xl font-bold">82.5</p>
++            <h3 className="text-indigo-100 text-sm font-medium mb-1">Rata-rata Kelas {selectedClass || '-'}</h3>
++            <p className="text-3xl font-bold">{classAverage}</p>
+           </CardContent>
+         </Card>
+         <Card>
+           <CardContent className="p-6">
+             <h3 className="text-slate-500 text-sm font-medium mb-1">Nilai Tertinggi</h3>
+-            <p className="text-3xl font-bold text-emerald-600">98.0</p>
++            <p className="text-3xl font-bold text-emerald-600">{highestScore}</p>
+           </CardContent>
+         </Card>
+         <Card>
+           <CardContent className="p-6">
+             <h3 className="text-slate-500 text-sm font-medium mb-1">Siswa Lulus KKM (>= 75)</h3>
+-            <p className="text-3xl font-bold text-indigo-600">85%</p>
++            <p className="text-3xl font-bold text-indigo-600">{passedKKM}%</p>
+           </CardContent>
+         </Card>
+       </div>
+@@ -47,6 +51,9 @@
+               value={selectedClass}
+               onChange={e => setSelectedClass(e.target.value)}
+             >
++              {uniqueClasses.length === 0 && (
++                <option value="">Belum ada kelas</option>
++              )}
+               {uniqueClasses.map(c => (
+                 <option key={c as string} value={c as string}>Kelas {c}</option>
+               ))}
+@@ -70,9 +77,7 @@
+                   <th className="px-6 py-4">Nama Siswa</th>
+-                  <th className="px-6 py-4">Ulangan Harian</th>
+-                  <th className="px-6 py-4">Tugas</th>
++                  <th className="px-6 py-4">Total Kuis</th>
+                   <th className="px-6 py-4">Nilai Akhir</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {classStudents.map((student) => {
+-                  // Simulasi nilai untuk demo UI
+-                  const hash = student.name.length * 10;
+-                  const final = Math.min(100, 70 + (hash % 30));
++                  const studentResults = quizResults.filter(r => r.studentId === student.id);
++                  const avg = getStudentAverage(student.id);
+                   return (
+                     <tr key={student.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                       <td className="px-6 py-4">{student.nisn}</td>
+                       <td className="px-6 py-4 font-medium text-slate-900">{student.name}</td>
+-                      <td className="px-6 py-4">{final - 2}</td>
+-                      <td className="px-6 py-4">{final + 2}</td>
+-                      <td className="px-6 py-4 font-bold text-indigo-600">{final}</td>
++                      <td className="px-6 py-4">{studentResults.length}</td>
++                      <td className="px-6 py-4 font-bold text-indigo-600">{avg.toFixed(1)}</td>
+                     </tr>
+                   )
+                 })}
+                 {classStudents.length === 0 && (
+                   <tr>
+-                    <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
++                    <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
+                       Siswa tidak ditemukan untuk kelas ini.
+                     </td>
