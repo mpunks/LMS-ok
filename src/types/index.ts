@@ -10,6 +10,7 @@ export interface User {
   email?: string;
   avatar?: string;
   classId?: string; // For Student
+  password?: string;
 }
 
 export interface ClassRoom {
@@ -60,13 +61,30 @@ export interface Question {
   explanation?: string;
 }
 
+export interface ViolationLog {
+  id: string;
+  timestamp: string;
+  type: 'TAB_SWITCH' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT' | 'RIGHT_CLICK' | 'COPY_PASTE';
+  description: string;
+  durationSeconds?: number;
+  questionIndex?: number;
+  snapshotImage?: string; // Data URL of screenshot taken at moment of violation
+  webcamImage?: string; // Data URL of webcam taken at moment of violation
+}
+
 export interface QuizResult {
   id: string;
   quizId: string;
   studentId: string;
   score: number;
+  finalScore?: number; // Score after penalties
   answers: Record<string, number>; // questionId -> optionIndex
   submittedAt: string;
+  violationsCount?: number;
+  violationLogs?: ViolationLog[];
+  penaltyDeduction?: number;
+  disqualified?: boolean;
+  teacherNote?: string;
 }
 
 export interface Attendance {

@@ -1,6 +1,6 @@
 {
   "name": "SmartLMS SMP",
   "description": "Modern Learning Management System for Junior High School with Google Sheets Integration",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera", "display-capture"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

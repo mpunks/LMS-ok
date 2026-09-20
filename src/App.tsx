@@ -47,8 +47,9 @@ export default function App() {
   const { webhookUrl, testConnection } = useGasStore();
 
   useEffect(() => {
-    if (webhookUrl) {
-      testConnection();
+    const clean = webhookUrl?.trim();
+    if (clean && clean.includes('script.google.com/macros/s/')) {
+      testConnection().catch(() => {});
     }
   }, []);
 

@@ -1,15 +1,18 @@
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Play, Clock, HelpCircle, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Play, Clock, HelpCircle, AlertTriangle, CheckCircle2, FileText, ShieldAlert } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
+import ExamRulesModal from '@/components/student/ExamRulesModal';
 
 export default function StudentQuizzes() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { quizzes, quizResults } = useDataStore();
+
+  const [selectedQuizForRules, setSelectedQuizForRules] = useState<any | null>(null);
 
   const studentQuizzes = quizzes.filter(q => q.classId === user?.classId);
 
@@ -45,17 +48,29 @@ export default function StudentQuizzes() {
                 </div>
 
                 {!isCompleted ? (
-                  <div className="space-y-4">
-                    <div className="bg-amber-50 text-amber-800 text-xs p-3 rounded-lg flex gap-2">
-                      <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                      <span>Sistem Anti-Kecurangan aktif. Anda tidak dapat berpindah tab selama ujian.</span>
+                  <div className="space-y-3">
+                    <div className="bg-amber-50 text-amber-800 text-xs p-3 rounded-lg flex gap-2 border border-amber-200">
+                      <ShieldAlert className="w-4 h-4 flex-shrink-0 text-amber-600 mt-0.5" />
+                      <span>Dilengkapi pengawasan tangkapan layar & wajib menyetujui tata tertib ujian sebelum mulai.</span>
                     </div>
-                    <Button 
-                      className="w-full gap-2" 
-                      onClick={() => navigate(`/student/quizzes/${quiz.id}`)}
-                    >
-                      <Play className="w-4 h-4" /> Mulai Ujian
-                    </Button>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        className="text-xs gap-1.5 border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={() => setSelectedQuizForRules(quiz)}
+                      >
+                        <FileText className="w-3.5 h-3.5 text-indigo-600" /> Tata Tertib
+                      </Button>
+                      <Button 
+                        size="sm"
+                        className="gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white" 
+                        onClick={() => setSelectedQuizForRules(quiz)}
+                      >
+                        <Play className="w-3.5 h-3.5" /> Mulai Ujian
+                      </Button>
+                    </div>
                   </div>
                 ) : (
                   <div className="mt-4 pt-4 border-t border-slate-200 flex justify-between items-center">
@@ -73,6 +88,21 @@ export default function StudentQuizzes() {
           </div>
         )}
       </div>
+
+      {/* Modal Tata Tertib CBT Sebelum Mulai Ujian */}
+      {selectedQuizForRules && (
+        <ExamRulesModal
+          isOpen={!!selectedQuizForRules}
+          onClose={() => setSelectedQuizForRules(null)}
+          onAgreeAndStart={() => {
+            const quizId = selectedQuizForRules.id;
+            setSelectedQuizForRules(null);
+            navigate(`/student/quizzes/${quizId}`);
+          }}
+          quiz={selectedQuizForRules}
+          student={user}
+        />
+      )}
     </div>
   );
 }

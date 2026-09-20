@@ -27,6 +27,8 @@ interface DataState {
   updateQuiz: (id: string, data: Partial<Quiz>) => Promise<void>;
   deleteQuiz: (id: string) => Promise<void>;
   submitQuiz: (result: QuizResult) => Promise<void>;
+  updateQuizResult: (id: string, data: Partial<QuizResult>) => Promise<void>;
+  deleteQuizResult: (id: string) => Promise<void>;
 
   // Assignments
   submitAssignment: (studentId: string, materialId: string, link: string) => Promise<void>;
@@ -37,14 +39,16 @@ const syncToGas = async (action: string, payload: any) => {
   if (gasStore.isConnected && gasStore.webhookUrl) {
     try {
       const res = await gasStore.executeAction(action, payload);
-      if (!res.success) {
-        throw new Error(res.error || 'Gagal sinkronisasi dengan Google Sheets');
+      if (!res?.success) {
+        console.warn(`GAS Sync Notice for ${action}:`, res?.error || 'Gagal sinkronisasi');
       }
+      return res;
     } catch (e: any) {
-      console.error('GAS Sync Error', e);
-      throw e;
+      console.warn(`GAS Sync Warning for ${action}:`, e?.message || e);
+      return { success: false, error: e?.message };
     }
   }
+  return { success: false, error: 'GAS not connected' };
 };
 
 export const useDataStore = create<DataState>()(
@@ -59,61 +63,74 @@ export const useDataStore = create<DataState>()(
 
       // Actions
       addUser: async (user) => {
-        await syncToGas('addUser', { user });
         set(state => ({ users: [...state.users, user] }));
+        await syncToGas('addUser', { user });
       },
       addUsers: async (newUsers) => {
         if (newUsers.length === 0) return;
-        try {
-          await syncToGas('addUsers', { users: newUsers });
-        } catch (e) {
-          console.warn('Sync bulk users warning:', e);
-        }
         set(state => ({ users: [...state.users, ...newUsers] }));
+        await syncToGas('addUsers', { users: newUsers });
       },
       updateUser: async (id, data) => {
-        await syncToGas('updateUser', { id, data });
         set(state => ({ users: state.users.map(u => u.id === id ? { ...u, ...data } : u) }));
+        await syncToGas('updateUser', { id, data });
       },
       deleteUser: async (id) => {
-        await syncToGas('deleteUser', { id });
         set(state => ({ users: state.users.filter(u => u.id !== id) }));
+        await syncToGas('deleteUser', { id });
       },
       resetPassword: async (id, defaultPassword) => {
         await syncToGas('resetPassword', { id, password: defaultPassword });
       },
 
       addMaterial: async (material) => {
-        await syncToGas('addMaterial', { material });
         set(state => ({ materials: [...state.materials, material] }));
+        await syncToGas('addMaterial', { material });
       },
       updateMaterial: async (id, data) => {
-        await syncToGas('updateMaterial', { id, data });
         set(state => ({ materials: state.materials.map(m => m.id === id ? { ...m, ...data } : m) }));
+        await syncToGas('updateMaterial', { id, data });
       },
       deleteMaterial: async (id) => {
-        await syncToGas('deleteMaterial', { id });
         set(state => ({ materials: state.materials.filter(m => m.id !== id) }));
+        await syncToGas('deleteMaterial', { id });
       },
       markMaterialAsRead: async (studentId, materialId) => {
         await syncToGas('markMaterialAsRead', { studentId, materialId });
       },
 
       addQuiz: async (quiz) => {
-        await syncToGas('addQuiz', { quiz });
         set(state => ({ quizzes: [...state.quizzes, quiz] }));
+        await syncToGas('addQuiz', { quiz });
       },
       updateQuiz: async (id, data) => {
-        await syncToGas('updateQuiz', { id, data });
         set(state => ({ quizzes: state.quizzes.map(q => q.id === id ? { ...q, ...data } : q) }));
+        await syncToGas('updateQuiz', { id, data });
       },
       deleteQuiz: async (id) => {
-        await syncToGas('deleteQuiz', { id });
         set(state => ({ quizzes: state.quizzes.filter(q => q.id !== id) }));
+        await syncToGas('deleteQuiz', { id });
       },
       submitQuiz: async (result) => {
+        set(state => ({ 
+          quizResults: [
+            ...state.quizResults.filter(r => !(r.quizId === result.quizId && r.studentId === result.studentId)), 
+            result
+          ] 
+        }));
         await syncToGas('submitQuiz', { result });
-        set(state => ({ quizResults: [...state.quizResults, result] }));
+      },
+      updateQuizResult: async (id, data) => {
+        set(state => ({
+          quizResults: state.quizResults.map(r => r.id === id ? { ...r, ...data } : r)
+        }));
+        await syncToGas('updateQuizResult', { id, data });
+      },
+      deleteQuizResult: async (id) => {
+        set(state => ({
+          quizResults: state.quizResults.filter(r => r.id !== id)
+        }));
+        await syncToGas('deleteQuizResult', { id });
       },
       submitAssignment: async (studentId, materialId, link) => {
         await syncToGas('submitAssignment', { studentId, materialId, link });

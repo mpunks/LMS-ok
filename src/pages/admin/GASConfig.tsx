@@ -203,17 +203,22 @@ export default function GASConfig() {
   const [copied, setCopied] = useState(false);
 
   const handleTest = async () => {
-    if (!url) {
+    const cleanUrl = url?.trim() || '';
+    if (!cleanUrl) {
       toast.error('Masukkan URL Webhook terlebih dahulu');
       return;
     }
+    if (!cleanUrl.includes('script.google.com/macros/s/')) {
+      toast.error('URL harus diawali dengan https://script.google.com/macros/s/...');
+      return;
+    }
     setIsTesting(true);
-    setWebhookUrl(url);
+    setWebhookUrl(cleanUrl);
     const success = await testConnection();
     if (success) {
       toast.success('Koneksi Webhook Berhasil!');
     } else {
-      toast.error('Gagal terhubung ke Webhook. Pastikan URL valid dan Apps Script telah di-deploy dengan benar.');
+      toast.error('Gagal terhubung ke Webhook. Pastikan URL berakhiran /exec dan akses disetel ke "Anyone" (Siapa saja).');
     }
     setIsTesting(false);
   };
@@ -271,6 +276,16 @@ export default function GASConfig() {
             <Button onClick={handleTest} isLoading={isTesting}>
               Tes Koneksi Webhook
             </Button>
+          </div>
+
+          <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800 space-y-1">
+            <p className="font-semibold text-amber-900">Tips Penting Agar Tidak Terjadi "Failed to fetch":</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              <li>Saat <strong>Deploy &gt; New deployment &gt; Web app</strong> di Google Apps Script:</li>
+              <li><strong>Execute as:</strong> Pilih <em>Me (email Anda)</em>.</li>
+              <li><strong>Who has access:</strong> Wajib pilih <strong><em>Anyone (Siapa saja)</em></strong>. Jangan pilih &quot;Only myself&quot; karena browser akan memblokir request dengan error <em>Failed to fetch</em>.</li>
+              <li>Pastikan URL berakhiran <code>/exec</code> (bukan <code>/dev</code>).</li>
+            </ul>
           </div>
           {isConnected && (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-emerald-50 p-4 rounded-lg border border-emerald-100">

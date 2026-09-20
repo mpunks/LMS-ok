@@ -17,25 +17,46 @@ export const useGasStore = create<GasState>()(
       setWebhookUrl: (url) => set({ webhookUrl: url, isConnected: false }),
       executeAction: async (action: string, payload: any = {}) => {
         const { webhookUrl } = get();
-        if (!webhookUrl) throw new Error('Webhook URL belum dikonfigurasi');
+        const cleanUrl = webhookUrl?.trim() || '';
+        if (!cleanUrl) {
+          return { success: false, error: 'Webhook URL belum dikonfigurasi' };
+        }
         
         try {
-          const response = await fetch(webhookUrl, {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+          const response = await fetch(cleanUrl, {
             method: 'POST',
-            // Kita sengaja tidak menggunakan Content-Type: application/json 
-            // untuk menghindari CORS preflight (OPTIONS) request yang tidak didukung GAS
-            body: JSON.stringify({ action, ...payload })
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8',
+            },
+            // Menggunakan text/plain agar tidak memicu preflight OPTIONS yang tidak didukung oleh GAS Web App
+            body: JSON.stringify({ action, ...payload }),
+            redirect: 'follow',
+            signal: controller.signal
           });
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            return { success: false, error: `Server merespon dengan status ${response.status}` };
+          }
           
           return await response.json();
-        } catch (error) {
-          console.error('GAS Request Error:', error);
-          return { success: false, error: 'Koneksi ke server gagal' };
+        } catch (error: any) {
+          const errorMsg = error?.name === 'AbortError' 
+            ? 'Batas waktu koneksi habis (timeout)' 
+            : (error?.message || 'Koneksi ke server gagal');
+          
+          console.warn('GAS Request Notice:', errorMsg);
+          return { success: false, error: errorMsg };
         }
       },
       testConnection: async () => {
         const { webhookUrl, executeAction } = get();
-        if (!webhookUrl || !webhookUrl.includes('script.google.com/macros/s/')) {
+        const cleanUrl = webhookUrl?.trim() || '';
+        if (!cleanUrl || !cleanUrl.includes('script.google.com/macros/s/')) {
           set({ isConnected: false });
           return false;
         }
@@ -46,6 +67,7 @@ export const useGasStore = create<GasState>()(
             set({ isConnected: true });
             return true;
           }
+          set({ isConnected: false });
           return false;
         } catch (e) {
           set({ isConnected: false });

@@ -2,16 +2,38 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { CheckSquare, Plus, Trash2, Edit2, Users } from 'lucide-react';
+import { 
+  CheckSquare, 
+  Plus, 
+  Trash2, 
+  Edit2, 
+  Users, 
+  ShieldAlert, 
+  AlertTriangle, 
+  Eye, 
+  X,
+  FileCheck,
+  Clock
+} from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
+import { Quiz, QuizResult, User } from '@/types';
+import ViolationDetailModal from '@/components/teacher/ViolationDetailModal';
 
 export default function TeacherQuizzes() {
-  const { quizzes, addQuiz, updateQuiz, deleteQuiz } = useDataStore();
+  const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users } = useDataStore();
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   
   const [formData, setFormData] = useState({ id: '', title: '', subjectId: 'Matematika', classId: '7A', durationMinutes: 45, materialId: '' });
+
+  // Quiz results inspection modal
+  const [activeResultsQuiz, setActiveResultsQuiz] = useState<Quiz | null>(null);
+  const [selectedViolationResult, setSelectedViolationResult] = useState<{
+    result: QuizResult;
+    student: User;
+    quiz: Quiz;
+  } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,7 +46,22 @@ export default function TeacherQuizzes() {
           ...formData,
           id: `q-${Date.now()}`,
           createdAt: new Date().toISOString(),
-          questions: []
+          questions: [
+            { 
+              id: `q1-${Date.now()}`, 
+              text: 'Berapakah hasil dari 15 + 27?', 
+              options: ['42', '32', '45', '52'],
+              correctOptionIndex: 0,
+              points: 25
+            },
+            { 
+              id: `q2-${Date.now()}`, 
+              text: 'Suku sejenis dari 3x + 2y - x + 5 adalah...', 
+              options: ['3x dan -x', '3x dan 2y', '2y dan 5', 'x dan 5'],
+              correctOptionIndex: 0,
+              points: 25
+            }
+          ]
         });
         toast.success('Kuis baru berhasil dibuat');
       }
@@ -54,8 +91,13 @@ export default function TeacherQuizzes() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-slate-900">Kelola Kuis & Ujian</h1>
-        <Button className="gap-2 shrink-0" onClick={() => {
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Kelola Kuis & Ujian CBT</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Manajemen soal ujian dan pemantauan hasil pengerjaan dengan proteksi tangkapan layar otomatis
+          </p>
+        </div>
+        <Button className="gap-2 shrink-0 text-xs" onClick={() => {
           setIsEdit(false);
           setFormData({ id: '', title: '', subjectId: 'Matematika', classId: '7A', durationMinutes: 45, materialId: '' });
           setShowForm(!showForm);
@@ -65,7 +107,7 @@ export default function TeacherQuizzes() {
       </div>
 
       {showForm && (
-        <Card className="border-indigo-100 bg-indigo-50/30">
+        <Card className="border-indigo-100 bg-indigo-50/30 shadow-sm">
           <CardHeader>
             <CardTitle>{isEdit ? 'Edit Kuis' : 'Buat Kuis Baru'}</CardTitle>
           </CardHeader>
@@ -75,16 +117,19 @@ export default function TeacherQuizzes() {
               <Input label="Durasi Ujian (Menit)" type="number" min="5" value={formData.durationMinutes} onChange={e => setFormData({...formData, durationMinutes: parseInt(e.target.value) || 45})} required />
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <label className="text-sm font-medium text-slate-700 block mb-1.5">Kelas</label>
-                  <select className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white" value={formData.classId} onChange={e => setFormData({...formData, classId: e.target.value})}>
+                  <label className="text-xs font-medium text-slate-700 block mb-1.5">Kelas</label>
+                  <select className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" value={formData.classId} onChange={e => setFormData({...formData, classId: e.target.value})}>
                     <option value="7A">7A</option>
                     <option value="7B">7B</option>
+                    <option value="8A">8A</option>
+                    <option value="8B">8B</option>
+                    <option value="9A">9A</option>
                   </select>
                 </div>
               </div>
               <div className="md:col-span-2 flex justify-end gap-2 mt-4">
-                <Button type="button" variant="ghost" onClick={() => setShowForm(false)}>Batal</Button>
-                <Button type="submit">Simpan Kuis</Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(false)}>Batal</Button>
+                <Button type="submit" size="sm">Simpan Kuis</Button>
               </div>
             </form>
           </CardContent>
@@ -92,45 +137,214 @@ export default function TeacherQuizzes() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {quizzes.map((quiz) => (
-          <Card key={quiz.id} className="hover:border-indigo-200 transition-colors">
-            <CardHeader className="pb-3 border-b-0">
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 px-2 py-1 rounded">
-                  {quiz.classId}
-                </span>
-                <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-1 rounded">
-                  {quiz.subjectId || 'Matematika'}
-                </span>
+        {quizzes.map((quiz) => {
+          const results = quizResults.filter(r => r.quizId === quiz.id);
+          const totalViolations = results.reduce((acc, curr) => acc + (curr.violationsCount || (curr.violationLogs?.length || 0)), 0);
+
+          return (
+            <Card key={quiz.id} className="hover:border-indigo-200 transition-colors shadow-sm flex flex-col justify-between">
+              <div>
+                <CardHeader className="pb-3 border-b-0">
+                  <div className="flex justify-between items-start">
+                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
+                      Kelas {quiz.classId}
+                    </span>
+                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                      {quiz.subjectId || 'Matematika'}
+                    </span>
+                  </div>
+                  <CardTitle className="text-base mt-3">{quiz.title}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-4 text-xs text-slate-600 mb-4">
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" /> {quiz.durationMinutes} Menit
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <CheckSquare className="w-3.5 h-3.5 text-slate-400" /> {quiz.questions?.length || 0} Soal
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-indigo-500" /> {results.length} Mengerjakan
+                    </div>
+                  </div>
+
+                  {/* Violation Tag */}
+                  {totalViolations > 0 ? (
+                    <div className="mb-4 bg-rose-50 border border-rose-200 text-rose-800 text-xs px-3 py-2 rounded-lg flex items-center gap-2 font-medium">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{totalViolations} Insiden Pelanggaran Terdeteksi</span>
+                    </div>
+                  ) : results.length > 0 ? (
+                    <div className="mb-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium">
+                      <FileCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Semua Peserta Tertib</span>
+                    </div>
+                  ) : null}
+                </CardContent>
               </div>
-              <CardTitle className="text-lg mt-3">{quiz.title}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-4 text-sm text-slate-600 mb-6">
-                <div className="flex items-center gap-1.5">
-                  <Users className="w-4 h-4" /> Kelas {quiz.classId}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <CheckSquare className="w-4 h-4" /> {quiz.durationMinutes} Mnt
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" className="flex-1" onClick={() => handleEdit(quiz)}>
-                  <Edit2 className="w-4 h-4 mr-2" /> Edit Kuis
+
+              <div className="p-4 pt-0 space-y-2 border-t border-slate-100 mt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActiveResultsQuiz(quiz)}
+                  className="w-full text-xs gap-1.5 font-semibold text-indigo-700 border-indigo-200 hover:bg-indigo-50"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Lihat Hasil & Pengawasan ({results.length})
                 </Button>
-                <Button variant="danger" size="sm" onClick={() => handleDelete(quiz.id)}>
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" className="flex-1 text-xs" onClick={() => handleEdit(quiz)}>
+                    <Edit2 className="w-3.5 h-3.5 mr-1.5" /> Edit
+                  </Button>
+                  <Button variant="danger" size="sm" onClick={() => handleDelete(quiz.id)}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
               </div>
-            </CardContent>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
+
         {quizzes.length === 0 && (
           <div className="col-span-full p-12 text-center border-2 border-dashed border-slate-200 rounded-xl text-slate-500">
-            Belum ada kuis yang ditambahkan.
+            Belum ada kuis yang ditambahkan. Silakan buat kuis baru di atas.
           </div>
         )}
       </div>
+
+      {/* Modal List of Students for Active Quiz */}
+      {activeResultsQuiz && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[85vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">
+                  Hasil & Pengawasan: {activeResultsQuiz.title}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Kelas {activeResultsQuiz.classId} • Durasi {activeResultsQuiz.durationMinutes} Menit
+                </p>
+              </div>
+              <button 
+                onClick={() => setActiveResultsQuiz(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              {(() => {
+                const results = quizResults.filter(r => r.quizId === activeResultsQuiz.id);
+                if (results.length === 0) {
+                  return (
+                    <div className="text-center py-12 text-slate-500 text-xs border-2 border-dashed border-slate-200 rounded-xl">
+                      Belum ada siswa yang mengumpulkan kuis ini.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left text-slate-600">
+                      <thead className="text-[11px] text-slate-700 uppercase bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-4 py-3">Nama Siswa</th>
+                          <th className="px-4 py-3">Waktu Submit</th>
+                          <th className="px-4 py-3">Integritas CBT</th>
+                          <th className="px-4 py-3">Nilai</th>
+                          <th className="px-4 py-3 text-right">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {results.map((res) => {
+                          const student = users.find(u => u.id === res.studentId) || {
+                            id: res.studentId,
+                            name: 'Siswa',
+                            role: 'STUDENT',
+                            nisn: '-',
+                            classId: activeResultsQuiz.classId
+                          } as User;
+
+                          const vCount = res.violationsCount || (res.violationLogs?.length || 0);
+                          const finalSc = res.finalScore !== undefined ? res.finalScore : res.score;
+
+                          return (
+                            <tr key={res.id} className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-semibold text-slate-900">
+                                {student.name}
+                                <span className="text-[10px] text-slate-400 block font-normal">NISN: {student.nisn || '-'}</span>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-[11px]">
+                                {new Date(res.submittedAt).toLocaleString('id-ID')}
+                              </td>
+                              <td className="px-4 py-3">
+                                {res.disqualified ? (
+                                  <span className="bg-rose-600 text-white px-2 py-0.5 rounded text-[10px] font-bold">
+                                    Didiskualifikasi
+                                  </span>
+                                ) : vCount > 0 ? (
+                                  <span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 w-fit">
+                                    <AlertTriangle className="w-3 h-3 text-rose-600" />
+                                    {vCount}x Pelanggaran
+                                  </span>
+                                ) : (
+                                  <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-medium">
+                                    Tertib
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="text-sm font-bold text-indigo-600">
+                                  {res.disqualified ? '0' : finalSc}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="text-xs gap-1 py-1"
+                                  onClick={() => setSelectedViolationResult({
+                                    result: res,
+                                    student: student,
+                                    quiz: activeResultsQuiz
+                                  })}
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  {vCount > 0 ? 'Bukti & Sanksi' : 'Detail'}
+                                </Button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <Button size="sm" onClick={() => setActiveResultsQuiz(null)}>
+                Tutup
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Violation Detail Modal */}
+      {selectedViolationResult && (
+        <ViolationDetailModal
+          isOpen={!!selectedViolationResult}
+          onClose={() => setSelectedViolationResult(null)}
+          result={selectedViolationResult.result}
+          student={selectedViolationResult.student}
+          quiz={selectedViolationResult.quiz}
+        />
+      )}
     </div>
   );
 }
