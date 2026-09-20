@@ -5,16 +5,18 @@ import { Input } from '@/components/ui/Input';
 import { Users, Search, Plus, GraduationCap, Upload, Trash2, KeyRound, Edit2 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
+import ImportUsersModal from '@/components/admin/ImportUsersModal';
 
 export default function AdminStudents() {
   const [activeTab, setActiveTab] = useState<'teachers' | 'students'>('teachers');
-  const { users, addUser, updateUser, deleteUser, resetPassword } = useDataStore();
+  const { users, addUser, addUsers, updateUser, deleteUser, resetPassword } = useDataStore();
   
   const teachers = users.filter(u => u.role === 'TEACHER');
   const students = users.filter(u => u.role === 'STUDENT');
   
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   
   const [formData, setFormData] = useState({ id: '', name: '', username: '', nik: '', nisn: '', classId: '' });
   const [isEdit, setIsEdit] = useState(false);
@@ -96,8 +98,12 @@ export default function AdminStudents() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-slate-900">Data Guru & Siswa</h1>
         <div className="flex gap-2">
-          <Button variant="outline" className="gap-2 shrink-0" onClick={() => toast.info('Fitur impor data menyusul')}>
-            <Upload className="w-4 h-4" /> Impor Excel
+          <Button 
+            variant="outline" 
+            className="gap-2 shrink-0 border-indigo-200 text-indigo-700 hover:bg-indigo-50" 
+            onClick={() => setShowImportModal(true)}
+          >
+            <Upload className="w-4 h-4" /> Impor Data (Excel / CSV)
           </Button>
           <Button className="gap-2 shrink-0" onClick={() => {
             setIsEdit(false);
@@ -236,6 +242,15 @@ export default function AdminStudents() {
           </div>
         </CardContent>
       </Card>
+
+      <ImportUsersModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        defaultRole={activeTab === 'teachers' ? 'TEACHER' : 'STUDENT'}
+        onImportSuccess={async (newUsers) => {
+          await addUsers(newUsers);
+        }}
+      />
     </div>
   );
 }

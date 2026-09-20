@@ -11,6 +11,7 @@ interface DataState {
   
   // Users (Admin, Teacher, Student)
   addUser: (user: User) => Promise<void>;
+  addUsers: (users: User[]) => Promise<void>;
   updateUser: (id: string, data: Partial<User>) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
   resetPassword: (id: string, defaultPassword: string) => Promise<void>;
@@ -60,6 +61,15 @@ export const useDataStore = create<DataState>()(
       addUser: async (user) => {
         await syncToGas('addUser', { user });
         set(state => ({ users: [...state.users, user] }));
+      },
+      addUsers: async (newUsers) => {
+        if (newUsers.length === 0) return;
+        try {
+          await syncToGas('addUsers', { users: newUsers });
+        } catch (e) {
+          console.warn('Sync bulk users warning:', e);
+        }
+        set(state => ({ users: [...state.users, ...newUsers] }));
       },
       updateUser: async (id, data) => {
         await syncToGas('updateUser', { id, data });
