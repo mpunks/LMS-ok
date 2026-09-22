@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { User } from '@/types';
+import { useDataStore } from '@/store/dataStore';
 
 interface ImportUsersModalProps {
   isOpen: boolean;
@@ -28,6 +29,8 @@ interface ImportUsersModalProps {
 interface ParsedUserRow {
   id: string;
   name: string;
+  gender?: 'L' | 'P';
+  subject?: string;
   nik?: string;
   nisn?: string;
   username?: string;
@@ -35,6 +38,7 @@ interface ParsedUserRow {
   isValid: boolean;
   errorMessage?: string;
   isSelected: boolean;
+  isExisting?: boolean;
 }
 
 export default function ImportUsersModal({
@@ -43,6 +47,7 @@ export default function ImportUsersModal({
   defaultRole,
   onImportSuccess
 }: ImportUsersModalProps) {
+  const { users: existingUsers } = useDataStore();
   const [role, setRole] = useState<'TEACHER' | 'STUDENT'>(defaultRole);
   const [mode, setMode] = useState<'file' | 'paste'>('file');
   const [pasteText, setPasteText] = useState('');
@@ -85,6 +90,8 @@ export default function ImportUsersModal({
     }
 
     const parsed: ParsedUserRow[] = [];
+    const seenKeys = new Set<string>();
+    let duplicateInFileCount = 0;
 
     rows.forEach((row, index) => {
       // Create normalized key lookup
@@ -102,6 +109,17 @@ export default function ImportUsersModal({
       };
 
       const name = getVal(['nama', 'nama lengkap', 'namasiswa', 'namaguru', 'name', 'fullname', 'nama_lengkap']);
+      const rawGender = getVal(['jeniskelamin', 'jk', 'gender', 'sex', 'lp', 'jeniskelaminlp', 'l/p']);
+      
+      let gender: 'L' | 'P' = 'L';
+      if (rawGender) {
+        const gLower = rawGender.toLowerCase().trim();
+        if (gLower.startsWith('p') || gLower.includes('wanita') || gLower.includes('female') || gLower === '2') {
+          gender = 'P';
+        } else {
+          gender = 'L';
+        }
+      }
       
       let isValid = true;
       let errorMessage = '';
@@ -112,26 +130,45 @@ export default function ImportUsersModal({
       }
 
       if (role === 'STUDENT') {
-        const nisn = getVal(['nisn', 'nis', 'noinduk', 'nomorinduk', 'id']);
-        const classId = getVal(['kelas', 'rombel', 'class', 'tingkat', 'kelasrombel']) || 'Umum';
+        const nisn = getVal(['nisn', 'nis', 'noinduk', 'nomorinduk', 'id']).trim();
+        const classId = (getVal(['kelas', 'rombel', 'class', 'tingkat', 'kelasrombel']) || '7A').toUpperCase().trim();
 
         if (!nisn) {
           isValid = false;
           errorMessage = errorMessage ? `${errorMessage}, NISN kosong` : 'NISN wajib diisi (untuk password default)';
         }
 
+        // Deduplication key inside file
+        const fileKey = nisn ? `nisn:${nisn}` : `name:${name.toLowerCase().trim()}::${classId}`;
+        if (seenKeys.has(fileKey)) {
+          duplicateInFileCount++;
+          return; // Skip duplicate inside file
+        }
+        seenKeys.add(fileKey);
+
+        // Check if student already exists in database
+        const existingStudent = existingUsers.find(u => 
+          u.role === 'STUDENT' && (
+            (nisn && u.nisn?.trim() === nisn) ||
+            (u.name?.toLowerCase().trim() === name.toLowerCase().trim() && (u.classId || '').toUpperCase().trim() === classId)
+          )
+        );
+
         parsed.push({
-          id: `s-import-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 4)}`,
+          id: existingStudent ? existingStudent.id : `s-import-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 4)}`,
           name,
+          gender,
           nisn,
-          classId: classId.toUpperCase(),
+          classId,
           isValid,
           errorMessage,
-          isSelected: isValid
+          isSelected: isValid,
+          isExisting: !!existingStudent
         });
       } else {
-        const nik = getVal(['nik', 'nip', 'noktp', 'nomorinduk', 'password']);
-        let username = getVal(['username', 'user', 'idpengguna', 'email']);
+        const nik = getVal(['nik', 'nip', 'noktp', 'nomorinduk', 'password']).trim();
+        let username = getVal(['username', 'user', 'idpengguna', 'email']).trim();
+        const subject = getVal(['matapelajaran', 'mapel', 'subject', 'pelajaran', 'ampu', 'bidangstudi']) || 'Matematika';
 
         if (!nik) {
           isValid = false;
@@ -142,17 +179,40 @@ export default function ImportUsersModal({
           username = generateUsernameFromName(name);
         }
 
+        const fileKey = username ? `user:${username.toLowerCase()}` : (nik ? `nik:${nik}` : `name:${name.toLowerCase().trim()}`);
+        if (seenKeys.has(fileKey)) {
+          duplicateInFileCount++;
+          return;
+        }
+        seenKeys.add(fileKey);
+
+        // Check if teacher already exists in database
+        const existingTeacher = existingUsers.find(u => 
+          u.role === 'TEACHER' && (
+            (username && u.username?.toLowerCase().trim() === username.toLowerCase().trim()) ||
+            (nik && u.nik?.trim() === nik) ||
+            (u.name?.toLowerCase().trim() === name.toLowerCase().trim())
+          )
+        );
+
         parsed.push({
-          id: `t-import-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 4)}`,
+          id: existingTeacher ? existingTeacher.id : `t-import-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 4)}`,
           name,
+          gender,
+          subject,
           nik,
           username,
           isValid,
           errorMessage,
-          isSelected: isValid
+          isSelected: isValid,
+          isExisting: !!existingTeacher
         });
       }
     });
+
+    if (duplicateInFileCount > 0) {
+      toast.info(`${duplicateInFileCount} baris data duplikat dalam berkas otomatis difilter`);
+    }
 
     if (parsed.length === 0) {
       toast.error('Tidak ada data valid yang dapat dibaca. Pastikan kolom sesuai format template.');
@@ -239,26 +299,28 @@ export default function ImportUsersModal({
 
     if (role === 'STUDENT') {
       fileName = `template_impor_siswa.${format}`;
-      headers = ['Nama Lengkap', 'NISN', 'Kelas'];
+      headers = ['Nama Lengkap', 'Jenis Kelamin (L/P)', 'NISN', 'Kelas'];
       sampleRows = [
-        { 'Nama Lengkap': 'Ahmad Fauzi Pratama', 'NISN': '0081234561', 'Kelas': '7A' },
-        { 'Nama Lengkap': 'Citra Dewi Lestari', 'NISN': '0081234562', 'Kelas': '7A' },
-        { 'Nama Lengkap': 'Budi Santoso', 'NISN': '0081234563', 'Kelas': '7B' },
-        { 'Nama Lengkap': 'Dinda Ayu Maharani', 'NISN': '0081234564', 'Kelas': '8A' },
+        { 'Nama Lengkap': 'Ahmad Fauzi Pratama', 'Jenis Kelamin (L/P)': 'L', 'NISN': '0081234561', 'Kelas': '7A' },
+        { 'Nama Lengkap': 'Citra Dewi Lestari', 'Jenis Kelamin (L/P)': 'P', 'NISN': '0081234562', 'Kelas': '7A' },
+        { 'Nama Lengkap': 'Budi Santoso', 'Jenis Kelamin (L/P)': 'L', 'NISN': '0081234563', 'Kelas': '7B' },
+        { 'Nama Lengkap': 'Dinda Ayu Maharani', 'Jenis Kelamin (L/P)': 'P', 'NISN': '0081234564', 'Kelas': '8A' },
       ];
     } else {
       fileName = `template_impor_guru.${format}`;
-      headers = ['Nama Lengkap', 'NIK', 'Username'];
+      headers = ['Nama Lengkap', 'Jenis Kelamin (L/P)', 'Mata Pelajaran', 'NIK', 'Username'];
       sampleRows = [
-        { 'Nama Lengkap': 'Drs. Bambang Sudarsono, M.Pd', 'NIK': '197508122005011002', 'Username': 'bambang' },
-        { 'Nama Lengkap': 'Siti Rahmawati, S.Pd', 'NIK': '198203152008012005', 'Username': 'siti.rahma' },
-        { 'Nama Lengkap': 'Hadi Wijaya, S.Kom', 'NIK': '198911202015021001', 'Username': 'hadi.wijaya' },
+        { 'Nama Lengkap': 'Drs. Bambang Sudarsono, M.Pd', 'Jenis Kelamin (L/P)': 'L', 'Mata Pelajaran': 'Matematika', 'NIK': '197508122005011002', 'Username': 'bambang' },
+        { 'Nama Lengkap': 'Siti Rahmawati, S.Pd', 'Jenis Kelamin (L/P)': 'P', 'Mata Pelajaran': 'Bahasa Indonesia', 'NIK': '198203152008012005', 'Username': 'siti.rahma' },
+        { 'Nama Lengkap': 'Hadi Wijaya, S.Kom', 'Jenis Kelamin (L/P)': 'L', 'Mata Pelajaran': 'Informatika', 'NIK': '198911202015021001', 'Username': 'hadi.wijaya' },
       ];
     }
 
     const ws = XLSX.utils.json_to_sheet(sampleRows, { header: headers });
     // Set column widths
-    ws['!cols'] = [{ wch: 30 }, { wch: 22 }, { wch: 15 }];
+    ws['!cols'] = role === 'STUDENT'
+      ? [{ wch: 30 }, { wch: 18 }, { wch: 22 }, { wch: 15 }]
+      : [{ wch: 30 }, { wch: 18 }, { wch: 24 }, { wch: 22 }, { wch: 18 }];
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, role === 'STUDENT' ? 'Data Siswa' : 'Data Guru');
@@ -293,14 +355,17 @@ export default function ImportUsersModal({
           return {
             id: r.id,
             name: r.name,
+            gender: r.gender || 'L',
             role: 'STUDENT',
             nisn: r.nisn,
-            classId: r.classId || 'Umum'
+            classId: r.classId || '7A'
           };
         } else {
           return {
             id: r.id,
             name: r.name,
+            gender: r.gender || 'L',
+            subject: r.subject || 'Matematika',
             role: 'TEACHER',
             nik: r.nik,
             username: r.username || generateUsernameFromName(r.name)
@@ -329,6 +394,8 @@ export default function ImportUsersModal({
   const validCount = parsedRows.filter(r => r.isValid).length;
   const invalidCount = parsedRows.filter(r => !r.isValid).length;
   const selectedCount = parsedRows.filter(r => r.isSelected && r.isValid).length;
+  const existingCount = parsedRows.filter(r => r.isExisting && r.isValid).length;
+  const newCount = validCount - existingCount;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
@@ -529,13 +596,18 @@ export default function ImportUsersModal({
             <div className="space-y-4">
               {/* Summary Bar */}
               <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
-                <div className="flex items-center gap-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2.5 text-sm">
                   <span className="font-medium text-slate-700">
                     Total Terbaca: <strong>{parsedRows.length}</strong>
                   </span>
                   <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100/70 px-2.5 py-0.5 rounded-full text-xs font-semibold">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> {validCount} Siap
+                    <CheckCircle2 className="w-3.5 h-3.5" /> {newCount} Data Baru
                   </span>
+                  {existingCount > 0 && (
+                    <span className="inline-flex items-center gap-1 text-blue-700 bg-blue-100/70 px-2.5 py-0.5 rounded-full text-xs font-semibold" title="Data sudah ada di sistem dan akan diperbarui tanpa menambah jumlah duplikat">
+                      <FileCheck className="w-3.5 h-3.5" /> {existingCount} Pembaruan (Anti-Duplikat)
+                    </span>
+                  )}
                   {invalidCount > 0 && (
                     <span className="inline-flex items-center gap-1 text-rose-700 bg-rose-100/70 px-2.5 py-0.5 rounded-full text-xs font-semibold">
                       <AlertCircle className="w-3.5 h-3.5" /> {invalidCount} Perlu Periksa
@@ -574,6 +646,8 @@ export default function ImportUsersModal({
                       </th>
                       <th className="p-3">Status</th>
                       <th className="p-3">Nama Lengkap</th>
+                      <th className="p-3 text-center w-14">L/P</th>
+                      {role === 'TEACHER' && <th className="p-3">Mata Pelajaran</th>}
                       <th className="p-3">{role === 'STUDENT' ? 'NISN (Password)' : 'NIK (Password)'}</th>
                       <th className="p-3">{role === 'STUDENT' ? 'Kelas' : 'Username'}</th>
                       <th className="p-3 w-12 text-center">Hapus</th>
@@ -602,9 +676,15 @@ export default function ImportUsersModal({
                         </td>
                         <td className="p-3 whitespace-nowrap">
                           {row.isValid ? (
-                            <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[11px] font-medium border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3" /> Siap
-                            </span>
+                            row.isExisting ? (
+                              <span className="inline-flex items-center gap-1 text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-[11px] font-semibold border border-blue-200" title="Data ini sudah terdaftar di sistem. Mengimpor ulang akan memperbarui data tanpa menambah duplikat.">
+                                <FileCheck className="w-3 h-3" /> Pembaruan
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[11px] font-medium border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3" /> Data Baru
+                              </span>
+                            )
                           ) : (
                             <span className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 px-2 py-0.5 rounded text-[11px] font-medium border border-rose-200" title={row.errorMessage}>
                               <AlertCircle className="w-3 h-3" /> {row.errorMessage}
@@ -614,6 +694,22 @@ export default function ImportUsersModal({
                         <td className="p-3 font-medium text-slate-900">
                           {row.name || <span className="text-rose-400 italic">Nama kosong</span>}
                         </td>
+                        <td className="p-3 text-center">
+                          {row.gender === 'P' ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700">
+                              P
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">
+                              L
+                            </span>
+                          )}
+                        </td>
+                        {role === 'TEACHER' && (
+                          <td className="p-3 font-medium text-slate-800">
+                            {row.subject || 'Matematika'}
+                          </td>
+                        )}
                         <td className="p-3">
                           {role === 'STUDENT' ? (
                             row.nisn || <span className="text-rose-400 italic">NISN kosong</span>
@@ -624,7 +720,7 @@ export default function ImportUsersModal({
                         <td className="p-3">
                           {role === 'STUDENT' ? (
                             <span className="px-2 py-0.5 rounded bg-slate-100 font-mono text-slate-700">
-                              {row.classId || 'Umum'}
+                              {row.classId || '7A'}
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 rounded bg-slate-100 font-mono text-slate-700">

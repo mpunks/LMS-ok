@@ -1,13 +1,15 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
-import { Users, BookOpen, CheckSquare, Settings } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Users, BookOpen, CheckSquare, Settings, Database, Trash2, ShieldAlert } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useDataStore } from '@/store/dataStore';
 import { useGasStore } from '@/store/gasStore';
 
 export default function AdminDashboard() {
   const { user } = useAuthStore();
-  const { users, materials, quizzes } = useDataStore();
+  const { users, materials, quizzes, quizResults } = useDataStore();
   const { isConnected } = useGasStore();
   
   const totalSiswa = users.filter(u => u.role === 'STUDENT').length;
@@ -53,32 +55,69 @@ export default function AdminDashboard() {
         </Card>
 
         {user?.role === 'SUPER_ADMIN' && (
-          <Card className="border-indigo-100 bg-indigo-50/50">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="w-5 h-5 text-indigo-600" />
-                Status Integrasi Google Sheets
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isConnected ? (
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
-                  <span className="text-sm font-medium text-emerald-700">Webhook terhubung</span>
-                </div>
-              ) : (
-                <>
+          <>
+            <Card className="border-indigo-100 bg-indigo-50/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-600" />
+                  Status Integrasi Google Sheets
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {isConnected ? (
                   <div className="flex items-center gap-3 mb-4">
-                    <div className="w-3 h-3 rounded-full bg-rose-500 animate-pulse"></div>
-                    <span className="text-sm font-medium text-slate-700">Webhook belum terhubung</span>
+                    <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                    <span className="text-sm font-medium text-emerald-700">Webhook terhubung</span>
                   </div>
-                  <p className="text-sm text-slate-600 mb-4">
-                    Sistem saat ini menggunakan penyimpanan lokal. Hubungkan dengan Google Sheets untuk persistensi data secara cloud.
-                  </p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-3 h-3 rounded-full bg-rose-500 animate-pulse"></div>
+                      <span className="text-sm font-medium text-slate-700">Webhook belum terhubung</span>
+                    </div>
+                    <p className="text-sm text-slate-600 mb-4">
+                      Sistem saat ini menggunakan penyimpanan lokal. Hubungkan dengan Google Sheets untuk persistensi data secara cloud.
+                    </p>
+                  </>
+                )}
+                <div className="pt-2 border-t border-indigo-200/60">
+                  <Link to="/admin/gas">
+                    <Button variant="outline" size="sm" className="w-full text-xs">
+                      Buka Konfigurasi Webhook GAS
+                    </Button>
+                  </Link>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-rose-200 bg-rose-50/30">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between text-base">
+                  <div className="flex items-center gap-2 text-rose-700">
+                    <Database className="w-5 h-5 text-rose-600" />
+                    <span>Pemeliharaan Database</span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 uppercase">
+                    Khusus Super Admin
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-slate-600">
+                  Fasilitas pembersihan database untuk persiapan pergantian semester, tahun ajaran baru, atau pembersihan data ujian ({quizResults.length} riwayat nilai, {materials.length} materi).
+                </p>
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-xs text-slate-500">Akun Super Admin terlindungi</span>
+                  <Link to="/admin/database">
+                    <Button variant="danger" size="sm" className="text-xs font-bold gap-1.5">
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Kelola Pembersihan
+                    </Button>
+                  </Link>
+                </div>
+              </CardContent>
+            </Card>
+          </>
         )}
       </div>
     </div>

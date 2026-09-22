@@ -4,13 +4,20 @@ import { Button } from '@/components/ui/Button';
 import { Search, Download, ShieldAlert, AlertTriangle, CheckCircle, Eye, FileText, Filter } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
+import { useAuthStore } from '@/store/authStore';
 import { User, QuizResult, Quiz } from '@/types';
 import ViolationDetailModal from '@/components/teacher/ViolationDetailModal';
 
 export default function TeacherGrades() {
+  const { user } = useAuthStore();
   const { users, quizResults, quizzes } = useDataStore();
   const students = users.filter(u => u.role === 'STUDENT');
-  const [selectedClass, setSelectedClass] = useState('');
+  const assignedClasses = user?.assignedClasses || [];
+  const uniqueClasses = Array.from(new Set(students.map(s => s.classId).filter(Boolean))) as string[];
+  
+  // Prioritize teacher assigned classes
+  const availableClasses = assignedClasses.length > 0 ? assignedClasses : uniqueClasses;
+  const [selectedClass, setSelectedClass] = useState(availableClasses[0] || '');
   const [search, setSearch] = useState('');
   const [filterViolationsOnly, setFilterViolationsOnly] = useState(false);
 
@@ -21,12 +28,9 @@ export default function TeacherGrades() {
     quiz?: Quiz;
   } | null>(null);
   
-  // Ambil kelas unik dari siswa
-  const uniqueClasses = Array.from(new Set(students.map(s => s.classId).filter(Boolean)));
-  
   // Default fallback if no class
-  if (uniqueClasses.length > 0 && (!selectedClass || !uniqueClasses.includes(selectedClass))) {
-    setSelectedClass(uniqueClasses[0] as string);
+  if (availableClasses.length > 0 && (!selectedClass || !availableClasses.includes(selectedClass))) {
+    setSelectedClass(availableClasses[0] as string);
   }
 
   const getStudentAverage = (studentId: string) => {
@@ -143,11 +147,13 @@ export default function TeacherGrades() {
                 value={selectedClass}
                 onChange={e => setSelectedClass(e.target.value)}
               >
-                {uniqueClasses.length === 0 && (
+                {availableClasses.length === 0 && (
                   <option value="">Belum ada kelas</option>
                 )}
-                {uniqueClasses.map(c => (
-                  <option key={c as string} value={c as string}>Kelas {c}</option>
+                {availableClasses.map(c => (
+                  <option key={c} value={c}>
+                    Kelas {c} {assignedClasses.includes(c) ? '★ (Diampu)' : ''}
+                  </option>
                 ))}
               </select>
 

@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { Settings, Save, Image as ImageIcon } from 'lucide-react';
+import { Settings, Save, Image as ImageIcon, Database, Trash2, AlertTriangle } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useAuthStore } from '@/store/authStore';
 
 export default function AdminSettings() {
+  const { user } = useAuthStore();
   const { appName, appLogo, themeColor, setSettings } = useSettingsStore();
   const [formData, setFormData] = useState({ appName, appLogo, themeColor });
 
@@ -88,6 +91,39 @@ export default function AdminSettings() {
           </Button>
         </CardContent>
       </Card>
+
+      {user?.role === 'SUPER_ADMIN' && (
+        <Card className="border-rose-200 shadow-xs overflow-hidden">
+          <CardHeader className="bg-rose-50/50 border-b border-rose-100">
+            <CardTitle className="text-base flex items-center justify-between">
+              <div className="flex items-center gap-2 text-rose-700 font-bold">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                Zona Berbahaya: Pembersihan Database
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 uppercase">
+                Khusus Super Admin
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-5 space-y-4">
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Fasilitas pembersihan database digunakan untuk menghapus data siswa, guru, materi pelajaran, atau hasil ujian saat pergantian semester dan tahun ajaran baru. Tindakan ini permanen, namun akun Super Admin selalu terlindungi.
+            </p>
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                <Database className="w-4 h-4 text-slate-400" />
+                Mendukung backup & pembersihan selektif
+              </span>
+              <Link to="/admin/database">
+                <Button variant="danger" size="sm" className="text-xs font-bold gap-2">
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Buka Menu Pembersihan Database
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

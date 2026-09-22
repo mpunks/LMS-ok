@@ -6,17 +6,19 @@ import { BookOpen, Plus, FileText, Youtube, Trash2, Edit2, Link as LinkIcon, Cod
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
+import { ALL_SCHOOL_CLASSES } from '@/data/schoolClasses';
 
 export default function TeacherMaterials() {
   const { user } = useAuthStore();
   const { materials, addMaterial, updateMaterial, deleteMaterial } = useDataStore();
   
+  const assignedClasses = user?.assignedClasses || [];
   const teacherMaterials = materials.filter(m => m.teacherId === user?.id).sort((a, b) => a.order - b.order);
   
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [formData, setFormData] = useState({ 
-    id: '', title: '', classId: '7A', subjectId: 'Matematika', 
+    id: '', title: '', classId: assignedClasses[0] || '7A', subjectId: 'Matematika', 
     type: 'PDF' as 'PDF' | 'VIDEO' | 'LINK' | 'HTML', 
     content: '', url: '', chapter: 'Bab 1', order: 1 
   });
@@ -90,7 +92,7 @@ export default function TeacherMaterials() {
         <h1 className="text-2xl font-bold text-slate-900">Materi Belajar</h1>
         <Button className="gap-2 shrink-0" onClick={() => {
           setIsEdit(false);
-          setFormData({ id: '', title: '', classId: '7A', subjectId: 'Matematika', type: 'PDF', content: '', url: '', chapter: 'Bab 1', order: teacherMaterials.length + 1 });
+          setFormData({ id: '', title: '', classId: assignedClasses[0] || '7A', subjectId: 'Matematika', type: 'PDF', content: '', url: '', chapter: 'Bab 1', order: teacherMaterials.length + 1 });
           setShowForm(!showForm);
         }}>
           <Plus className="w-4 h-4" /> Tambah Materi Baru
@@ -107,11 +109,24 @@ export default function TeacherMaterials() {
               <Input label="Judul Materi" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required />
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <label className="text-sm font-medium text-slate-700 block mb-1.5">Kelas</label>
-                  <select className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white" value={formData.classId} onChange={e => setFormData({...formData, classId: e.target.value})}>
-                    <option value="7A">7A</option>
-                    <option value="7B">7B</option>
-                    <option value="8A">8A</option>
+                  <label className="text-sm font-medium text-slate-700 block mb-1.5">Kelas Target</label>
+                  <select 
+                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-sm" 
+                    value={formData.classId} 
+                    onChange={e => setFormData({...formData, classId: e.target.value})}
+                  >
+                    {assignedClasses.length > 0 && (
+                      <optgroup label="Kelas yang Anda Ampu">
+                        {assignedClasses.map(c => (
+                          <option key={c} value={c}>Kelas {c} ★ (Diampu)</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <optgroup label="Seluruh Kelas Sekolah (7A-7L, 8A-8L, 9A-9K)">
+                      {ALL_SCHOOL_CLASSES.map(c => (
+                        <option key={c} value={c}>Kelas {c}</option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
                 <div className="flex-1">

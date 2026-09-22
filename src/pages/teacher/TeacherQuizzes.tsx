@@ -17,15 +17,27 @@ import {
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
+import { useAuthStore } from '@/store/authStore';
 import { Quiz, QuizResult, User } from '@/types';
+import { ALL_SCHOOL_CLASSES } from '@/data/schoolClasses';
 import ViolationDetailModal from '@/components/teacher/ViolationDetailModal';
 
 export default function TeacherQuizzes() {
+  const { user } = useAuthStore();
   const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users } = useDataStore();
+  const assignedClasses = user?.assignedClasses || [];
+
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   
-  const [formData, setFormData] = useState({ id: '', title: '', subjectId: 'Matematika', classId: '7A', durationMinutes: 45, materialId: '' });
+  const [formData, setFormData] = useState({ 
+    id: '', 
+    title: '', 
+    subjectId: 'Matematika', 
+    classId: assignedClasses[0] || '7A', 
+    durationMinutes: 45, 
+    materialId: '' 
+  });
 
   // Quiz results inspection modal
   const [activeResultsQuiz, setActiveResultsQuiz] = useState<Quiz | null>(null);
@@ -99,7 +111,7 @@ export default function TeacherQuizzes() {
         </div>
         <Button className="gap-2 shrink-0 text-xs" onClick={() => {
           setIsEdit(false);
-          setFormData({ id: '', title: '', subjectId: 'Matematika', classId: '7A', durationMinutes: 45, materialId: '' });
+          setFormData({ id: '', title: '', subjectId: 'Matematika', classId: assignedClasses[0] || '7A', durationMinutes: 45, materialId: '' });
           setShowForm(!showForm);
         }}>
           <Plus className="w-4 h-4" /> Buat Kuis Baru
@@ -117,13 +129,24 @@ export default function TeacherQuizzes() {
               <Input label="Durasi Ujian (Menit)" type="number" min="5" value={formData.durationMinutes} onChange={e => setFormData({...formData, durationMinutes: parseInt(e.target.value) || 45})} required />
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <label className="text-xs font-medium text-slate-700 block mb-1.5">Kelas</label>
-                  <select className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" value={formData.classId} onChange={e => setFormData({...formData, classId: e.target.value})}>
-                    <option value="7A">7A</option>
-                    <option value="7B">7B</option>
-                    <option value="8A">8A</option>
-                    <option value="8B">8B</option>
-                    <option value="9A">9A</option>
+                  <label className="text-xs font-medium text-slate-700 block mb-1.5">Kelas Target</label>
+                  <select 
+                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" 
+                    value={formData.classId} 
+                    onChange={e => setFormData({...formData, classId: e.target.value})}
+                  >
+                    {assignedClasses.length > 0 && (
+                      <optgroup label="Kelas yang Anda Ampu">
+                        {assignedClasses.map(c => (
+                          <option key={c} value={c}>Kelas {c} ★ (Diampu)</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <optgroup label="Seluruh Rombel Sekolah (7A-7L, 8A-8L, 9A-9K)">
+                      {ALL_SCHOOL_CLASSES.map(c => (
+                        <option key={c} value={c}>Kelas {c}</option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
               </div>

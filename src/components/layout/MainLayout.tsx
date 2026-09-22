@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -49,25 +49,59 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   };
 
   const navItems = 
-    user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN' ? adminNav :
-    user?.role === 'TEACHER' ? teacherNav :
-    studentNav;
+    user?.role === 'SUPER_ADMIN' 
+      ? [
+          ...adminNav,
+          { name: 'Bersihkan Database', href: '/admin/database', icon: Database, isDanger: true, badge: 'Super Admin' }
+        ]
+      : user?.role === 'ADMIN' 
+        ? adminNav 
+        : user?.role === 'TEACHER' 
+          ? teacherNav 
+          : studentNav;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row overflow-hidden">
-      {/* Mobile Header (Now acts as top bar for all screens when sidebar is closed, or always visible) */}
-      <header className={cn("flex items-center justify-between bg-white border-b border-slate-200 px-4 h-16 sticky top-0 z-30 transition-all", isSidebarOpen ? "md:hidden" : "")}>
+      {/* Header: Completely hidden when menu is hidden so dashboard frame expands fully without top bar obstruction */}
+      <header 
+        id="main-top-header"
+        className={cn(
+          "bg-white border-b border-slate-200 px-4 h-16 sticky top-0 z-30 transition-all",
+          !isSidebarOpen ? "hidden" : "md:hidden flex items-center justify-between"
+        )}
+      >
         <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
           {appLogo ? <img src={appLogo} alt="Logo" className="w-8 h-8 rounded" /> : <BookOpen className="w-6 h-6" />}
           {appName}
         </div>
         <button
-          onClick={() => setIsSidebarOpen(true)}
+          onClick={() => setIsSidebarOpen(false)}
           className="p-2 -mr-2 text-slate-600 hover:text-slate-900 focus:outline-none"
+          title="Tutup Menu"
         >
-          <Menu className="w-6 h-6" />
+          <X className="w-6 h-6" />
         </button>
       </header>
+
+      {/* Floating Menu Toggle Button when menu is hidden */}
+      {!isSidebarOpen && (
+        <motion.button
+          id="btn-open-sidebar"
+          initial={{ opacity: 0, scale: 0.85 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.85 }}
+          transition={{ duration: 0.2 }}
+          onClick={() => setIsSidebarOpen(true)}
+          className="fixed top-3 left-3 z-40 p-2.5 rounded-xl bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-md hover:shadow-xl border border-slate-200/90 backdrop-blur-md transition-all hover:scale-105 active:scale-95 group flex items-center gap-2"
+          title="Buka Menu Navigasi"
+          aria-label="Buka Menu Navigasi"
+        >
+          <Menu className="w-5 h-5 text-slate-600 group-hover:text-indigo-600 transition-colors" />
+          <span className="text-xs font-semibold text-slate-700 group-hover:text-indigo-600 pr-1 hidden sm:inline-block transition-all">
+            Menu
+          </span>
+        </motion.button>
+      )}
 
       {/* Mobile Backdrop */}
       <AnimatePresence>
@@ -115,21 +149,28 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-1">
-          {navItems.map((item) => {
+          {navItems.map((item: any) => {
             const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + '/');
             return (
               <Link
                 key={item.href}
                 to={item.href}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                  "flex items-center justify-between px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-indigo-50 text-indigo-700"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    ? (item.isDanger ? "bg-rose-50 text-rose-700 font-semibold" : "bg-indigo-50 text-indigo-700 font-semibold")
+                    : (item.isDanger ? "text-rose-600 hover:bg-rose-50/70" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900")
                 )}
               >
-                <item.icon className={cn("w-5 h-5", isActive ? "text-indigo-600" : "text-slate-400")} />
-                {item.name}
+                <div className="flex items-center gap-3">
+                  <item.icon className={cn("w-4 h-4 sm:w-5 sm:h-5", isActive ? (item.isDanger ? "text-rose-600" : "text-indigo-600") : (item.isDanger ? "text-rose-500" : "text-slate-400"))} />
+                  <span>{item.name}</span>
+                </div>
+                {item.badge && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wider">
+                    {item.badge}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -146,21 +187,29 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         </div>
       </motion.aside>
 
-      {/* Main Content */}
-      <main className={cn(
-        "flex-1 max-w-7xl mx-auto w-full p-4 md:p-8 md:pt-8 min-h-[calc(100vh-4rem)] md:min-h-screen overflow-x-hidden transition-all duration-300",
-        isSidebarOpen ? "md:ml-64" : "ml-0"
-      )}>
+      {/* Main Content: Expands fully across the entire screen when menu is hidden */}
+      <main 
+        id="main-content-canvas"
+        className={cn(
+          "flex-1 w-full min-h-screen overflow-x-hidden transition-all duration-300",
+          isSidebarOpen 
+            ? "md:ml-64 max-w-7xl mx-auto p-4 md:p-8" 
+            : "ml-0 max-w-none p-4 md:p-8 lg:p-10 pt-16 md:pt-8"
+        )}
+      >
         {/* Toggle Button for Desktop when sidebar is open */}
-        <div className={cn("hidden md:flex items-center mb-6", isSidebarOpen ? "block" : "hidden")}>
-           <button
-             onClick={() => setIsSidebarOpen(false)}
-             className="p-2 -ml-2 text-slate-500 hover:text-slate-800 focus:outline-none"
-             title="Tutup Menu"
-           >
-             <Menu className="w-6 h-6" />
-           </button>
-        </div>
+        {isSidebarOpen && (
+          <div className="hidden md:flex items-center justify-between mb-4 pb-2 border-b border-slate-200/60">
+            <button
+              onClick={() => setIsSidebarOpen(false)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200/80 bg-white hover:bg-slate-50 text-slate-600 hover:text-indigo-600 text-xs font-medium shadow-xs transition-all hover:border-indigo-200"
+              title="Sembunyikan Menu Navigasi (Perbesar Layar Dashboard)"
+            >
+              <Menu className="w-4 h-4 text-slate-500 hover:text-indigo-600" />
+              <span>Sembunyikan Menu (Perbesar Tampilan)</span>
+            </button>
+          </div>
+        )}
         {children}
       </main>
     </div>

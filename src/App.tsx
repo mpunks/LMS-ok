@@ -13,6 +13,7 @@ import GASConfig from './pages/admin/GASConfig';
 import AdminUsers from './pages/admin/AdminUsers';
 import AdminStudents from './pages/admin/AdminStudents';
 import AdminSettings from './pages/admin/AdminSettings';
+import AdminDatabaseClean from './pages/admin/AdminDatabaseClean';
 
 // Teacher Pages
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
@@ -83,6 +84,11 @@ export default function App() {
         <Route path="/admin/settings" element={
           <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
             <AdminSettings />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/database" element={
+          <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            <AdminDatabaseClean />
           </ProtectedRoute>
         } />
 

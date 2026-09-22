@@ -4,12 +4,17 @@ export interface User {
   id: string;
   role: Role;
   name: string;
+  gender?: 'L' | 'P'; // Jenis Kelamin: L = Laki-laki, P = Perempuan
   username?: string; // For Admin/Teacher
   nik?: string; // For Admin/Teacher
   nisn?: string; // For Student
   email?: string;
   avatar?: string;
   classId?: string; // For Student
+  status?: 'ACTIVE' | 'GRADUATED'; // Status siswa: ACTIVE atau GRADUATED (Lulus)
+  assignedClasses?: string[]; // For Teacher (e.g. ['7A', '7B', '8C'])
+  subject?: string; // For Teacher: Mata Pelajaran yang Diampu (e.g. 'Matematika', 'IPA')
+  assignedSubjects?: string[]; // Optional for teachers with multiple subjects
   password?: string;
 }
 
@@ -116,3 +121,45 @@ export interface ForumReply {
   content: string;
   createdAt: string;
 }
+
+export type DatabaseCleanTarget = 
+  | 'ALL' 
+  | 'STUDENTS' 
+  | 'TEACHERS' 
+  | 'MATERIALS' 
+  | 'QUIZZES' 
+  | 'QUIZ_RESULTS';
+
+export interface DatabaseCleanOptions {
+  targets: DatabaseCleanTarget[];
+  preserveAdmins?: boolean; // Always true to protect admin/superadmin
+}
+
+export interface DatabaseCleanSummary {
+  students: number;
+  teachers: number;
+  materials: number;
+  quizzes: number;
+  quizResults: number;
+}
+
+export interface PromotionOptions {
+  grade9Action: 'DELETE' | 'GRADUATE'; // 'DELETE': Hapus siswa kelas 9 dari database; 'GRADUATE': Ubah status ke LULUS / Alumni
+  grade8LTarget?: string; // Target kelas untuk 8L (default: '9K' atau '9L')
+}
+
+export interface PromotionSummary {
+  promotedGrade7To8: number;
+  promotedGrade8To9: number;
+  grade9Handled: number;
+  grade9Action: 'DELETE' | 'GRADUATE';
+  totalAffected: number;
+}
+
+export interface DeduplicationSummary {
+  duplicatesRemoved: number;
+  studentsDeduplicated: number;
+  teachersDeduplicated: number;
+  totalRemaining: number;
+}
+

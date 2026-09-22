@@ -14,7 +14,7 @@ const GENERATED_GAS_CODE = `/**
 function setupAllTables() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheets = {
-    'Users': ['id', 'role', 'name', 'username', 'nik', 'nisn', 'classId', 'password'],
+    'Users': ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password'],
     'Materials': ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt'],
     'Quizzes': ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'createdAt'],
     'QuizResults': ['id', 'quizId', 'studentId', 'score', 'submittedAt'],
@@ -84,11 +84,20 @@ function doPost(e) {
         if (userSheet) {
           const rows = userSheet.getDataRange().getValues();
           for (let i = 1; i < rows.length; i++) {
-            const [id, rRole, name, username, nik, nisn, classId, pass] = rows[i];
+            const [id, rRole, name, gender, subject, username, nik, nisn, classId, assignedClasses, pass] = rows[i];
             if ((identifier === username || identifier === nik) && password === String(pass) && (rRole === 'TEACHER' || rRole === 'ADMIN')) {
               return ContentService.createTextOutput(JSON.stringify({ 
                 success: true, 
-                user: { id, role: rRole, name, username, nik } 
+                user: { 
+                  id, 
+                  role: rRole, 
+                  name, 
+                  gender: gender || 'L', 
+                  subject: subject || '', 
+                  username, 
+                  nik,
+                  assignedClasses: assignedClasses ? String(assignedClasses).split(',').map(s => s.trim()).filter(Boolean) : []
+                } 
               })).setMimeType(ContentService.MimeType.JSON);
             }
           }
@@ -98,11 +107,18 @@ function doPost(e) {
         if (userSheet) {
           const rows = userSheet.getDataRange().getValues();
           for (let i = 1; i < rows.length; i++) {
-            const [id, rRole, name, username, nik, nisn, classId, pass] = rows[i];
+            const [id, rRole, name, gender, subject, username, nik, nisn, classId, assignedClasses, pass] = rows[i];
             if (String(identifier) === String(nisn) && String(password) === String(pass) && rRole === 'STUDENT') {
               return ContentService.createTextOutput(JSON.stringify({ 
                 success: true, 
-                user: { id, role: rRole, name, nisn, classId } 
+                user: { 
+                  id, 
+                  role: rRole, 
+                  name, 
+                  gender: gender || 'L', 
+                  nisn, 
+                  classId 
+                } 
               })).setMimeType(ContentService.MimeType.JSON);
             }
           }
@@ -115,18 +131,121 @@ function doPost(e) {
     if (action === 'addUser') {
       const u = data.user;
       const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
-      ss.getSheetByName('Users').appendRow([u.id, u.role, u.name, u.username || '', u.nik || '', u.nisn || '', u.classId || '', pass]);
+      const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
+      ss.getSheetByName('Users').appendRow([
+        u.id, 
+        u.role, 
+        u.name, 
+        u.gender || 'L', 
+        u.subject || '', 
+        u.username || '', 
+        u.nik || '', 
+        u.nisn || '', 
+        u.classId || '', 
+        assigned, 
+        pass
+      ]);
     } 
+    else if (action === 'setAllUsers') {
+      const sheet = ss.getSheetByName('Users');
+      if (sheet) {
+        if (sheet.getLastRow() > 1) {
+          sheet.deleteRows(2, sheet.getLastRow() - 1);
+        }
+        const userList = data.users || [];
+        userList.forEach(u => {
+          const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
+          const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
+          sheet.appendRow([
+            u.id, 
+            u.role, 
+            u.name, 
+            u.gender || 'L', 
+            u.subject || '', 
+            u.username || '', 
+            u.nik || '', 
+            u.nisn || '', 
+            u.classId || '', 
+            assigned, 
+            pass
+          ]);
+        });
+      }
+    }
+    else if (action === 'addUsers') {
+      const sheet = ss.getSheetByName('Users');
+      const userList = data.users || [];
+      const existingData = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
+      
+      userList.forEach(u => {
+        const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
+        const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
+        
+        // Find if already exists in Sheet (row 2 onwards)
+        let foundRow = -1;
+        for (let r = 1; r < existingData.length; r++) {
+          const rowId = String(existingData[r][0]);
+          const rowRole = String(existingData[r][1]);
+          const rowNisn = String(existingData[r][7]);
+          const rowUser = String(existingData[r][5]);
+          const rowName = String(existingData[r][2]).toLowerCase().trim();
+          const rowClass = String(existingData[r][8]).toUpperCase().trim();
+
+          if (rowId === u.id) { foundRow = r + 1; break; }
+          if (u.role === 'STUDENT' && rowRole === 'STUDENT') {
+            if (u.nisn && String(u.nisn).trim() === rowNisn.trim()) { foundRow = r + 1; break; }
+            if (u.name && u.classId && u.name.toLowerCase().trim() === rowName && u.classId.toUpperCase().trim() === rowClass) {
+              foundRow = r + 1; break;
+            }
+          } else if (u.role === 'TEACHER' && rowRole === 'TEACHER') {
+            if (u.username && String(u.username).toLowerCase().trim() === rowUser.toLowerCase().trim()) { foundRow = r + 1; break; }
+          }
+        }
+
+        if (foundRow > -1) {
+          // Update existing row
+          sheet.getRange(foundRow, 3).setValue(u.name);
+          sheet.getRange(foundRow, 4).setValue(u.gender || 'L');
+          sheet.getRange(foundRow, 5).setValue(u.subject || '');
+          sheet.getRange(foundRow, 6).setValue(u.username || '');
+          sheet.getRange(foundRow, 7).setValue(u.nik || '');
+          sheet.getRange(foundRow, 8).setValue(u.nisn || '');
+          sheet.getRange(foundRow, 9).setValue(u.classId || '');
+          sheet.getRange(foundRow, 10).setValue(assigned);
+          sheet.getRange(foundRow, 11).setValue(pass);
+        } else {
+          sheet.appendRow([
+            u.id, 
+            u.role, 
+            u.name, 
+            u.gender || 'L', 
+            u.subject || '', 
+            u.username || '', 
+            u.nik || '', 
+            u.nisn || '', 
+            u.classId || '', 
+            assigned, 
+            pass
+          ]);
+        }
+      });
+    }
     else if (action === 'updateUser') {
       const sheet = ss.getSheetByName('Users');
       const rowIdx = findRowIndex(sheet, 0, data.id);
       if (rowIdx > -1) {
         const u = data.data;
-        if (u.name) sheet.getRange(rowIdx, 3).setValue(u.name);
-        if (u.username) sheet.getRange(rowIdx, 4).setValue(u.username);
-        if (u.nik) sheet.getRange(rowIdx, 5).setValue(u.nik);
-        if (u.nisn) sheet.getRange(rowIdx, 6).setValue(u.nisn);
-        if (u.classId) sheet.getRange(rowIdx, 7).setValue(u.classId);
+        if (u.name !== undefined) sheet.getRange(rowIdx, 3).setValue(u.name);
+        if (u.gender !== undefined) sheet.getRange(rowIdx, 4).setValue(u.gender);
+        if (u.subject !== undefined) sheet.getRange(rowIdx, 5).setValue(u.subject);
+        if (u.username !== undefined) sheet.getRange(rowIdx, 6).setValue(u.username);
+        if (u.nik !== undefined) sheet.getRange(rowIdx, 7).setValue(u.nik);
+        if (u.nisn !== undefined) sheet.getRange(rowIdx, 8).setValue(u.nisn);
+        if (u.classId !== undefined) sheet.getRange(rowIdx, 9).setValue(u.classId);
+        if (u.assignedClasses !== undefined) {
+          const val = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : u.assignedClasses;
+          sheet.getRange(rowIdx, 10).setValue(val);
+        }
       }
     }
     else if (action === 'deleteUser') {
@@ -137,7 +256,7 @@ function doPost(e) {
     else if (action === 'resetPassword') {
       const sheet = ss.getSheetByName('Users');
       const rowIdx = findRowIndex(sheet, 0, data.id);
-      if (rowIdx > -1) sheet.getRange(rowIdx, 8).setValue(data.password);
+      if (rowIdx > -1) sheet.getRange(rowIdx, 11).setValue(data.password);
     }
     else if (action === 'addMaterial') {
       const m = data.material;
@@ -183,6 +302,72 @@ function doPost(e) {
     }
     else if (action === 'markMaterialAsRead') {
       ss.getSheetByName('StudentProgress').appendRow([data.studentId, data.materialId, new Date().toISOString()]);
+    }
+    else if (action === 'clearDatabase') {
+      const targets = data.targets || [];
+      const isAll = targets.indexOf('All') > -1;
+
+      // Clear Materials
+      if (isAll || targets.indexOf('Materials') > -1) {
+        const sheet = ss.getSheetByName('Materials');
+        if (sheet && sheet.getLastRow() > 1) {
+          sheet.deleteRows(2, sheet.getLastRow() - 1);
+        }
+      }
+
+      // Clear Quizzes
+      if (isAll || targets.indexOf('Quizzes') > -1) {
+        const sheet = ss.getSheetByName('Quizzes');
+        if (sheet && sheet.getLastRow() > 1) {
+          sheet.deleteRows(2, sheet.getLastRow() - 1);
+        }
+      }
+
+      // Clear QuizResults
+      if (isAll || targets.indexOf('QuizResults') > -1) {
+        const sheet = ss.getSheetByName('QuizResults');
+        if (sheet && sheet.getLastRow() > 1) {
+          sheet.deleteRows(2, sheet.getLastRow() - 1);
+        }
+      }
+
+      // Clear Assignments
+      if (isAll || targets.indexOf('Assignments') > -1) {
+        const sheet = ss.getSheetByName('Assignments');
+        if (sheet && sheet.getLastRow() > 1) {
+          sheet.deleteRows(2, sheet.getLastRow() - 1);
+        }
+      }
+
+      // Clear StudentProgress
+      if (isAll || targets.indexOf('StudentProgress') > -1) {
+        const sheet = ss.getSheetByName('StudentProgress');
+        if (sheet && sheet.getLastRow() > 1) {
+          sheet.deleteRows(2, sheet.getLastRow() - 1);
+        }
+      }
+
+      // Clear Users (Students/Teachers, protecting Super Admin)
+      const userSheet = ss.getSheetByName('Users');
+      if (userSheet && userSheet.getLastRow() > 1) {
+        const rows = userSheet.getDataRange().getValues();
+        // Traverse backwards from bottom up to row 2
+        for (let r = rows.length - 1; r >= 1; r--) {
+          const role = String(rows[r][1]).trim();
+          if (role === 'SUPER_ADMIN') continue; // Always preserve SUPER_ADMIN!
+          
+          let shouldDel = false;
+          if (isAll) {
+            shouldDel = (role !== 'SUPER_ADMIN');
+          } else {
+            if (targets.indexOf('Students') > -1 && role === 'STUDENT') shouldDel = true;
+            if (targets.indexOf('Teachers') > -1 && role === 'TEACHER') shouldDel = true;
+          }
+          if (shouldDel) {
+            userSheet.deleteRow(r + 1);
+          }
+        }
+      }
     }
     
     return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Action received and processed' })).setMimeType(ContentService.MimeType.JSON);

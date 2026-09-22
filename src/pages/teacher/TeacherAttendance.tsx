@@ -4,13 +4,19 @@ import { Button } from '@/components/ui/Button';
 import { Calendar, Users, Save } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
+import { useAuthStore } from '@/store/authStore';
 
 export default function TeacherAttendance() {
+  const { user } = useAuthStore();
   const { users } = useDataStore();
   const students = users.filter(u => u.role === 'STUDENT');
   
-  const uniqueClasses = Array.from(new Set(students.map(s => s.classId).filter(Boolean)));
-  const [selectedClass, setSelectedClass] = useState(uniqueClasses[0] as string || '');
+  const assignedClasses = user?.assignedClasses || [];
+  const uniqueStudentClasses = Array.from(new Set(students.map(s => s.classId).filter(Boolean))) as string[];
+  
+  // Prefer teacher's assigned classes if configured, otherwise fall back to all student classes
+  const availableClasses = assignedClasses.length > 0 ? assignedClasses : uniqueStudentClasses;
+  const [selectedClass, setSelectedClass] = useState(availableClasses[0] || '');
   
   const classStudents = students.filter(s => s.classId === selectedClass);
   
@@ -44,15 +50,17 @@ export default function TeacherAttendance() {
                 <span className="text-sm font-medium text-slate-700">{new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               </div>
               <select 
-                className="border border-slate-300 rounded px-3 py-2 text-sm outline-none bg-white"
+                className="border border-slate-300 rounded px-3 py-2 text-sm outline-none bg-white font-medium"
                 value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
               >
-                {uniqueClasses.length === 0 && (
+                {availableClasses.length === 0 && (
                   <option value="">Belum ada kelas</option>
                 )}
-                {uniqueClasses.map(c => (
-                  <option key={c as string} value={c as string}>Kelas {c}</option>
+                {availableClasses.map(c => (
+                  <option key={c} value={c}>
+                    Kelas {c} {assignedClasses.includes(c) ? '★ (Diampu)' : ''}
+                  </option>
                 ))}
               </select>
             </div>
