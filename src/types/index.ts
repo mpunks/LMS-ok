@@ -55,6 +55,9 @@ export interface Quiz {
   durationMinutes: number;
   questions: Question[];
   createdAt: string;
+  startTime?: string; // Jadwal mulai pengerjaan kuis (ISO string / YYYY-MM-DDTHH:mm)
+  endTime?: string; // Batas akhir pengerjaan kuis (opsional)
+  isScheduled?: boolean; // Indikator apakah kuis dijadwalkan
 }
 
 export interface Question {
@@ -64,6 +67,9 @@ export interface Question {
   correctOptionIndex: number;
   points: number;
   explanation?: string;
+  imageUrl?: string; // Link media gambar
+  videoUrl?: string; // Link media video (YouTube / MP4)
+  audioUrl?: string; // Link media audio (MP3 / WAV)
 }
 
 export interface ViolationLog {

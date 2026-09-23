@@ -15,17 +15,19 @@ import {
   Lock,
   Eye,
   AlertCircle,
-  FileText
+  FileText,
+  CalendarClock
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
-import { ViolationLog, QuizResult } from '@/types';
+import { ViolationLog, QuizResult, Quiz } from '@/types';
 import ExamRulesModal from '@/components/student/ExamRulesModal';
+import QuestionMediaRenderer from '@/components/quiz/QuestionMediaRenderer';
 
 // Fallback Mock Quiz if quiz not found in store
-const DEFAULT_QUIZ = {
+const DEFAULT_QUIZ: Quiz = {
   id: 'q-1',
   materialId: 'm-1',
   classId: '7A',
@@ -531,26 +533,55 @@ export default function StudentQuizCBT() {
             </div>
 
             {/* Anti-Cheat Rules Box */}
-            <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-4 space-y-3">
-              <h3 className="text-sm font-bold text-rose-900 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                Ketentuan Integritas & Anti-Kecurangan Ujian:
-              </h3>
-              <ul className="text-xs text-rose-800 space-y-2 list-disc pl-5">
-                <li>
-                  <strong>Tangkapan Layar Otomatis:</strong> Sistem secara otomatis menjepret bukti tangkapan layar saat Anda berpindah tab, meminimalkan jendela, atau membuka aplikasi lain.
-                </li>
-                <li>
-                  <strong>Kamera Pengawas:</strong> Foto wajah dan durasi Anda meninggalkan lembar ujian dicatat ke dalam Berita Acara Guru.
-                </li>
-                <li>
-                  <strong>Mode Layar Penuh Wajib:</strong> Ujian harus dikerjakan dalam mode Fullscreen. Menekan tombol keluar akan dianggap pelanggaran.
-                </li>
-                <li>
-                  <strong>Batas Maksimal 3 Pelanggaran:</strong> Jika mencapai 3 kali peringatan, ujian akan dihentikan seketika dan Anda dapat <strong>didiskualifikasi</strong>.
-                </li>
-              </ul>
-            </div>
+            {activeQuiz.startTime && new Date(activeQuiz.startTime) > new Date() ? (
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-5 space-y-2 text-amber-950">
+                <div className="flex items-center gap-2 font-bold text-amber-900 text-sm">
+                  <CalendarClock className="w-5 h-5 text-amber-600" />
+                  Kuis Ini Terjadwal (Belum Dibuka)
+                </div>
+                <p className="text-xs text-amber-800 leading-relaxed">
+                  Guru pengampu telah menjadwalkan kuis ini untuk dimulai pada:<br />
+                  <strong className="text-sm text-amber-950 font-bold">
+                    {new Date(activeQuiz.startTime).toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' })}
+                  </strong>
+                </p>
+                <p className="text-xs text-amber-700">
+                  Silakan kembali lagi saat jam ujian telah dimulai.
+                </p>
+              </div>
+            ) : activeQuiz.endTime && new Date(activeQuiz.endTime) < new Date() ? (
+              <div className="bg-slate-100 border border-slate-300 rounded-xl p-5 space-y-2 text-slate-800">
+                <div className="flex items-center gap-2 font-bold text-slate-900 text-sm">
+                  <AlertTriangle className="w-5 h-5 text-slate-500" />
+                  Batas Waktu Pengerjaan Telah Berakhir
+                </div>
+                <p className="text-xs text-slate-600">
+                  Akses ujian ini telah ditutup pada{' '}
+                  <strong>{new Date(activeQuiz.endTime).toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' })}</strong>.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-4 space-y-3">
+                <h3 className="text-sm font-bold text-rose-900 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  Ketentuan Integritas & Anti-Kecurangan Ujian:
+                </h3>
+                <ul className="text-xs text-rose-800 space-y-2 list-disc pl-5">
+                  <li>
+                    <strong>Tangkapan Layar Otomatis:</strong> Sistem secara otomatis menjepret bukti tangkapan layar saat Anda berpindah tab, meminimalkan jendela, atau membuka aplikasi lain.
+                  </li>
+                  <li>
+                    <strong>Kamera Pengawas:</strong> Foto wajah dan durasi Anda meninggalkan lembar ujian dicatat ke dalam Berita Acara Guru.
+                  </li>
+                  <li>
+                    <strong>Mode Layar Penuh Wajib:</strong> Ujian harus dikerjakan dalam mode Fullscreen. Menekan tombol keluar akan dianggap pelanggaran.
+                  </li>
+                  <li>
+                    <strong>Batas Maksimal 3 Pelanggaran:</strong> Jika mencapai 3 kali peringatan, ujian akan dihentikan seketika dan Anda dapat <strong>didiskualifikasi</strong>.
+                  </li>
+                </ul>
+              </div>
+            )}
 
             {/* Proctoring Check List */}
             <div className="space-y-2 border border-slate-200 rounded-xl p-4 bg-slate-50/50">
@@ -575,13 +606,29 @@ export default function StudentQuizCBT() {
               </div>
             </div>
 
-            <Button 
-              onClick={() => setShowRulesModal(true)} 
-              isLoading={isInitializingStreams}
-              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold gap-2 text-sm shadow-md rounded-xl transition-all"
-            >
-              <FileText className="w-4 h-4" /> Buka Tata Tertib & Mulai Ujian
-            </Button>
+            {activeQuiz.startTime && new Date(activeQuiz.startTime) > new Date() ? (
+              <Button 
+                disabled
+                className="w-full py-3.5 bg-slate-300 text-slate-600 font-bold gap-2 text-sm rounded-xl cursor-not-allowed"
+              >
+                <Lock className="w-4 h-4" /> Ujian Belum Dibuka
+              </Button>
+            ) : activeQuiz.endTime && new Date(activeQuiz.endTime) < new Date() ? (
+              <Button 
+                disabled
+                className="w-full py-3.5 bg-slate-200 text-slate-500 font-bold gap-2 text-sm rounded-xl cursor-not-allowed"
+              >
+                Ujian Telah Ditutup
+              </Button>
+            ) : (
+              <Button 
+                onClick={() => setShowRulesModal(true)} 
+                isLoading={isInitializingStreams}
+                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold gap-2 text-sm shadow-md rounded-xl transition-all"
+              >
+                <FileText className="w-4 h-4" /> Buka Tata Tertib & Mulai Ujian
+              </Button>
+            )}
           </CardContent>
         </Card>
 
@@ -743,9 +790,20 @@ export default function StudentQuizCBT() {
               </span>
             </div>
 
-            <p className="text-base sm:text-lg text-slate-800 font-medium mb-8 leading-relaxed">
+            <p className="text-base sm:text-lg text-slate-800 font-medium mb-5 leading-relaxed">
               {currentQ?.text}
             </p>
+
+            {/* Media Rendering (Image, Video, Audio) if attached */}
+            {(currentQ?.imageUrl || currentQ?.videoUrl || currentQ?.audioUrl) && (
+              <div className="mb-6">
+                <QuestionMediaRenderer
+                  imageUrl={currentQ?.imageUrl}
+                  videoUrl={currentQ?.videoUrl}
+                  audioUrl={currentQ?.audioUrl}
+                />
+              </div>
+            )}
 
             <div className="space-y-3">
               {currentQ?.options?.map((opt, i) => (

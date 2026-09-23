@@ -11,9 +11,13 @@ import {
   ShieldAlert, 
   AlertTriangle, 
   Eye, 
-  X,
-  FileCheck,
-  Clock
+  X, 
+  FileCheck, 
+  Clock,
+  Calendar,
+  HelpCircle,
+  Upload,
+  CalendarClock
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
@@ -21,6 +25,7 @@ import { useAuthStore } from '@/store/authStore';
 import { Quiz, QuizResult, User } from '@/types';
 import { ALL_SCHOOL_CLASSES } from '@/data/schoolClasses';
 import ViolationDetailModal from '@/components/teacher/ViolationDetailModal';
+import QuizQuestionsModal from '@/components/teacher/QuizQuestionsModal';
 
 export default function TeacherQuizzes() {
   const { user } = useAuthStore();
@@ -30,17 +35,31 @@ export default function TeacherQuizzes() {
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   
-  const [formData, setFormData] = useState({ 
+  const [formData, setFormData] = useState<{
+    id: string;
+    title: string;
+    subjectId: string;
+    classId: string;
+    durationMinutes: number;
+    materialId: string;
+    isScheduled: boolean;
+    startTime: string;
+    endTime: string;
+  }>({ 
     id: '', 
     title: '', 
     subjectId: 'Matematika', 
     classId: assignedClasses[0] || '7A', 
     durationMinutes: 45, 
-    materialId: '' 
+    materialId: '',
+    isScheduled: false,
+    startTime: '',
+    endTime: ''
   });
 
-  // Quiz results inspection modal
+  // Modal states
   const [activeResultsQuiz, setActiveResultsQuiz] = useState<Quiz | null>(null);
+  const [activeQuestionsQuiz, setActiveQuestionsQuiz] = useState<Quiz | null>(null);
   const [selectedViolationResult, setSelectedViolationResult] = useState<{
     result: QuizResult;
     student: User;
@@ -51,12 +70,29 @@ export default function TeacherQuizzes() {
     e.preventDefault();
     try {
       if (isEdit) {
-        await updateQuiz(formData.id, formData);
+        await updateQuiz(formData.id, {
+          title: formData.title,
+          subjectId: formData.subjectId,
+          classId: formData.classId,
+          durationMinutes: formData.durationMinutes,
+          materialId: formData.materialId,
+          isScheduled: formData.isScheduled,
+          startTime: formData.isScheduled && formData.startTime ? formData.startTime : undefined,
+          endTime: formData.isScheduled && formData.endTime ? formData.endTime : undefined
+        });
         toast.success('Kuis diperbarui');
       } else {
-        await addQuiz({
-          ...formData,
-          id: `q-${Date.now()}`,
+        const newQuizId = `q-${Date.now()}`;
+        const newQuizData: Quiz = {
+          id: newQuizId,
+          title: formData.title,
+          subjectId: formData.subjectId,
+          classId: formData.classId,
+          durationMinutes: formData.durationMinutes,
+          materialId: formData.materialId,
+          isScheduled: formData.isScheduled,
+          startTime: formData.isScheduled && formData.startTime ? formData.startTime : undefined,
+          endTime: formData.isScheduled && formData.endTime ? formData.endTime : undefined,
           createdAt: new Date().toISOString(),
           questions: [
             { 
@@ -74,8 +110,11 @@ export default function TeacherQuizzes() {
               points: 25
             }
           ]
-        });
-        toast.success('Kuis baru berhasil dibuat');
+        };
+        await addQuiz(newQuizData);
+        toast.success('Kuis baru berhasil dibuat! Anda dapat langsung mengelola atau mengimpor butir soal.');
+        // Prompt to open questions manager
+        setActiveQuestionsQuiz(newQuizData);
       }
       setShowForm(false);
     } catch (error: any) {
@@ -83,14 +122,24 @@ export default function TeacherQuizzes() {
     }
   };
 
-  const handleEdit = (quiz: any) => {
-    setFormData({ id: quiz.id, title: quiz.title, subjectId: quiz.subjectId || 'Matematika', classId: quiz.classId || '7A', durationMinutes: quiz.durationMinutes, materialId: quiz.materialId });
+  const handleEdit = (quiz: Quiz) => {
+    setFormData({ 
+      id: quiz.id, 
+      title: quiz.title, 
+      subjectId: quiz.subjectId || 'Matematika', 
+      classId: quiz.classId || '7A', 
+      durationMinutes: quiz.durationMinutes, 
+      materialId: quiz.materialId || '',
+      isScheduled: !!quiz.isScheduled || !!quiz.startTime,
+      startTime: quiz.startTime || '',
+      endTime: quiz.endTime || ''
+    });
     setIsEdit(true);
     setShowForm(true);
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Yakin ingin menghapus kuis ini?')) {
+    if (window.confirm('Yakin ingin menghapus kuis ini beserta seluruh soal dan data nilainya?')) {
       try {
         await deleteQuiz(id);
         toast.success('Kuis berhasil dihapus');
@@ -100,18 +149,56 @@ export default function TeacherQuizzes() {
     }
   };
 
+  // Helper for schedule status
+  const getScheduleStatus = (quiz: Quiz) => {
+    if (!quiz.startTime) return null;
+    const now = new Date();
+    const start = new Date(quiz.startTime);
+    const end = quiz.endTime ? new Date(quiz.endTime) : null;
+
+    if (now < start) {
+      return {
+        label: 'Terjadwal (Belum Mulai)',
+        color: 'bg-amber-100 text-amber-800 border-amber-200',
+        detail: `Mulai: ${start.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}`
+      };
+    } else if (end && now > end) {
+      return {
+        label: 'Selesai / Ditutup',
+        color: 'bg-slate-100 text-slate-700 border-slate-200',
+        detail: `Berakhir: ${end.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}`
+      };
+    } else {
+      return {
+        label: 'Sedang Aktif',
+        color: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        detail: 'Kuis dapat dikerjakan siswa'
+      };
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Kelola Kuis & Ujian CBT</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Manajemen soal ujian dan pemantauan hasil pengerjaan dengan proteksi tangkapan layar otomatis
+            Manajemen butir soal ujian (tambah, edit, hapus, impor Excel/Word), penjadwalan waktu mulai, dan pemantauan CBT
           </p>
         </div>
-        <Button className="gap-2 shrink-0 text-xs" onClick={() => {
+        <Button className="gap-2 shrink-0 text-xs bg-indigo-600 hover:bg-indigo-700" onClick={() => {
           setIsEdit(false);
-          setFormData({ id: '', title: '', subjectId: 'Matematika', classId: assignedClasses[0] || '7A', durationMinutes: 45, materialId: '' });
+          setFormData({ 
+            id: '', 
+            title: '', 
+            subjectId: 'Matematika', 
+            classId: assignedClasses[0] || '7A', 
+            durationMinutes: 45, 
+            materialId: '',
+            isScheduled: false,
+            startTime: '',
+            endTime: ''
+          });
           setShowForm(!showForm);
         }}>
           <Plus className="w-4 h-4" /> Buat Kuis Baru
@@ -119,50 +206,141 @@ export default function TeacherQuizzes() {
       </div>
 
       {showForm && (
-        <Card className="border-indigo-100 bg-indigo-50/30 shadow-sm">
+        <Card className="border-indigo-100 bg-indigo-50/30 shadow-sm animate-in fade-in">
           <CardHeader>
-            <CardTitle>{isEdit ? 'Edit Kuis' : 'Buat Kuis Baru'}</CardTitle>
+            <CardTitle>{isEdit ? 'Edit Kuis & Pengaturan Jadwal' : 'Buat Kuis Baru'}</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Input label="Judul Kuis" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required />
-              <Input label="Durasi Ujian (Menit)" type="number" min="5" value={formData.durationMinutes} onChange={e => setFormData({...formData, durationMinutes: parseInt(e.target.value) || 45})} required />
+              <Input 
+                label="Judul Kuis / Ujian" 
+                value={formData.title} 
+                onChange={e => setFormData({...formData, title: e.target.value})} 
+                placeholder="Contoh: Penilaian Harian Bab 1 Bilangan Bulat"
+                required 
+              />
+              <Input 
+                label="Durasi Ujian (Menit)" 
+                type="number" 
+                min="5" 
+                value={formData.durationMinutes} 
+                onChange={e => setFormData({...formData, durationMinutes: parseInt(e.target.value) || 45})} 
+                required 
+              />
+              
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <label className="text-xs font-medium text-slate-700 block mb-1.5">Kelas Target</label>
-                  <select 
-                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" 
-                    value={formData.classId} 
-                    onChange={e => setFormData({...formData, classId: e.target.value})}
-                  >
-                    {assignedClasses.length > 0 && (
-                      <optgroup label="Kelas yang Anda Ampu">
-                        {assignedClasses.map(c => (
-                          <option key={c} value={c}>Kelas {c} ★ (Diampu)</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    <optgroup label="Seluruh Rombel Sekolah (7A-7L, 8A-8L, 9A-9K)">
-                      {ALL_SCHOOL_CLASSES.map(c => (
-                        <option key={c} value={c}>Kelas {c}</option>
-                      ))}
-                    </optgroup>
-                  </select>
+                  <label className="text-xs font-medium text-slate-700 block mb-1.5">Mata Pelajaran</label>
+                  <input
+                    type="text"
+                    value={formData.subjectId}
+                    onChange={e => setFormData({...formData, subjectId: e.target.value})}
+                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs outline-none focus:border-indigo-500"
+                    placeholder="Contoh: Matematika"
+                    required
+                  />
                 </div>
               </div>
-              <div className="md:col-span-2 flex justify-end gap-2 mt-4">
+
+              <div>
+                <label className="text-xs font-medium text-slate-700 block mb-1.5">Kelas Target</label>
+                <select 
+                  className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" 
+                  value={formData.classId} 
+                  onChange={e => setFormData({...formData, classId: e.target.value})}
+                >
+                  {assignedClasses.length > 0 && (
+                    <optgroup label="Kelas yang Anda Ampu">
+                      {assignedClasses.map(c => (
+                        <option key={c} value={c}>Kelas {c} ★ (Diampu)</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="Seluruh Rombel Sekolah (7A-7L, 8A-8L, 9A-9K)">
+                    {ALL_SCHOOL_CLASSES.map(c => (
+                      <option key={c} value={c}>Kelas {c}</option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+
+              {/* Opsi Penjadwalan Waktu Mulai Kuis */}
+              <div className="md:col-span-2 p-4 rounded-xl border border-indigo-200 bg-white/80 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.isScheduled}
+                      onChange={e => setFormData({...formData, isScheduled: e.target.checked})}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <CalendarClock className="w-4 h-4 text-indigo-600" />
+                      Jadwalkan Waktu Kapan Kuis Bisa Mulai Dikerjakan
+                    </span>
+                  </label>
+                  <span className="text-[11px] text-slate-500">
+                    {formData.isScheduled ? 'Terjadwal Otomatis' : 'Fleksibel (Kapan Saja)'}
+                  </span>
+                </div>
+
+                {formData.isScheduled ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100 animate-in fade-in">
+                    <div>
+                      <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        Waktu Mulai Pengerjaan <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={formData.startTime}
+                        onChange={e => setFormData({...formData, startTime: e.target.value})}
+                        className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs font-medium text-slate-800 outline-none focus:border-indigo-500"
+                        required={formData.isScheduled}
+                      />
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Siswa tidak dapat memulai ujian sebelum jam & tanggal yang ditentukan ini.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        Batas Akhir / Waktu Selesai (Opsional)
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={formData.endTime}
+                        onChange={e => setFormData({...formData, endTime: e.target.value})}
+                        className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs font-medium text-slate-800 outline-none focus:border-indigo-500"
+                      />
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Setelah waktu ini lewat, akses kuis akan ditutup bagi siswa.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500">
+                    Kuis dapat dikerjakan siswa kapan saja tanpa batasan tanggal/jam mulai. Aktifkan opsi di atas jika ingin membatasi waktu serentak.
+                  </p>
+                )}
+              </div>
+
+              <div className="md:col-span-2 flex justify-end gap-2 mt-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(false)}>Batal</Button>
-                <Button type="submit" size="sm">Simpan Kuis</Button>
+                <Button type="submit" size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                  {isEdit ? 'Simpan Perubahan Kuis' : 'Simpan Kuis & Lanjut ke Soal'}
+                </Button>
               </div>
             </form>
           </CardContent>
         </Card>
       )}
 
+      {/* Grid of Quizzes */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {quizzes.map((quiz) => {
           const results = quizResults.filter(r => r.quizId === quiz.id);
           const totalViolations = results.reduce((acc, curr) => acc + (curr.violationsCount || (curr.violationLogs?.length || 0)), 0);
+          const scheduleStatus = getScheduleStatus(quiz);
 
           return (
             <Card key={quiz.id} className="hover:border-indigo-200 transition-colors shadow-sm flex flex-col justify-between">
@@ -176,29 +354,45 @@ export default function TeacherQuizzes() {
                       {quiz.subjectId || 'Matematika'}
                     </span>
                   </div>
-                  <CardTitle className="text-base mt-3">{quiz.title}</CardTitle>
+                  <CardTitle className="text-base mt-3 leading-snug">{quiz.title}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center gap-4 text-xs text-slate-600 mb-4">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 mb-3">
                     <div className="flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-slate-400" /> {quiz.durationMinutes} Menit
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <CheckSquare className="w-3.5 h-3.5 text-slate-400" /> {quiz.questions?.length || 0} Soal
-                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => setActiveQuestionsQuiz(quiz)}
+                      className="flex items-center gap-1.5 hover:text-indigo-600 font-semibold cursor-pointer text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/70 px-2 py-0.5 rounded transition-colors"
+                      title="Klik untuk kelola butir soal"
+                    >
+                      <CheckSquare className="w-3.5 h-3.5 text-indigo-600" /> {quiz.questions?.length || 0} Soal
+                    </button>
                     <div className="flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-indigo-500" /> {results.length} Mengerjakan
                     </div>
                   </div>
 
+                  {/* Scheduled Time Banner if set */}
+                  {scheduleStatus && (
+                    <div className={`mb-3 p-2 rounded-lg border text-xs font-medium flex items-center justify-between ${scheduleStatus.color}`}>
+                      <div className="flex items-center gap-1.5">
+                        <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+                        <span>{scheduleStatus.label}</span>
+                      </div>
+                      <span className="text-[10px] opacity-90">{scheduleStatus.detail}</span>
+                    </div>
+                  )}
+
                   {/* Violation Tag */}
                   {totalViolations > 0 ? (
-                    <div className="mb-4 bg-rose-50 border border-rose-200 text-rose-800 text-xs px-3 py-2 rounded-lg flex items-center gap-2 font-medium">
+                    <div className="mb-2 bg-rose-50 border border-rose-200 text-rose-800 text-xs px-3 py-2 rounded-lg flex items-center gap-2 font-medium">
                       <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                       <span>{totalViolations} Insiden Pelanggaran Terdeteksi</span>
                     </div>
                   ) : results.length > 0 ? (
-                    <div className="mb-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium">
+                    <div className="mb-2 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium">
                       <FileCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                       <span>Semua Peserta Tertib</span>
                     </div>
@@ -206,22 +400,34 @@ export default function TeacherQuizzes() {
                 </CardContent>
               </div>
 
+              {/* Action Buttons in Card */}
               <div className="p-4 pt-0 space-y-2 border-t border-slate-100 mt-2">
+                {/* Button Kelola Soal (Utama) */}
+                <Button
+                  size="sm"
+                  onClick={() => setActiveQuestionsQuiz(quiz)}
+                  className="w-full text-xs gap-1.5 font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-none"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  Kelola Soal ({quiz.questions?.length || 0}) • Tambah / Edit / Impor
+                </Button>
+
+                {/* Button Lihat Hasil */}
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => setActiveResultsQuiz(quiz)}
-                  className="w-full text-xs gap-1.5 font-semibold text-indigo-700 border-indigo-200 hover:bg-indigo-50"
+                  className="w-full text-xs gap-1.5 font-medium text-slate-700 border-slate-200 hover:bg-slate-50"
                 >
-                  <Eye className="w-3.5 h-3.5" />
-                  Lihat Hasil & Pengawasan ({results.length})
+                  <Eye className="w-3.5 h-3.5 text-slate-500" />
+                  Lihat Hasil & Pengawasan CBT ({results.length})
                 </Button>
 
                 <div className="flex gap-2">
                   <Button variant="secondary" size="sm" className="flex-1 text-xs" onClick={() => handleEdit(quiz)}>
-                    <Edit2 className="w-3.5 h-3.5 mr-1.5" /> Edit
+                    <Edit2 className="w-3.5 h-3.5 mr-1.5" /> Edit Jadwal & Judul
                   </Button>
-                  <Button variant="danger" size="sm" onClick={() => handleDelete(quiz.id)}>
+                  <Button variant="danger" size="sm" onClick={() => handleDelete(quiz.id)} title="Hapus kuis">
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 </div>
@@ -232,10 +438,21 @@ export default function TeacherQuizzes() {
 
         {quizzes.length === 0 && (
           <div className="col-span-full p-12 text-center border-2 border-dashed border-slate-200 rounded-xl text-slate-500">
-            Belum ada kuis yang ditambahkan. Silakan buat kuis baru di atas.
+            Belum ada kuis yang ditambahkan. Silakan klik tombol "Buat Kuis Baru" di atas.
           </div>
         )}
       </div>
+
+      {/* Quiz Questions Management Modal */}
+      {activeQuestionsQuiz && (
+        <QuizQuestionsModal
+          isOpen={!!activeQuestionsQuiz}
+          onClose={() => {
+            setActiveQuestionsQuiz(null);
+          }}
+          quiz={quizzes.find(q => q.id === activeQuestionsQuiz.id) || activeQuestionsQuiz}
+        />
+      )}
 
       {/* Modal List of Students for Active Quiz */}
       {activeResultsQuiz && (

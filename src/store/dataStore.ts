@@ -76,7 +76,56 @@ export const useDataStore = create<DataState>()(
         { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User
       ],
       materials: [] as Material[],
-      quizzes: [] as Quiz[],
+      quizzes: [
+        {
+          id: 'quiz-cbt-1',
+          title: 'Penilaian Harian CBT Matematika: Bangun Datar & Aljabar',
+          subjectId: 'Matematika',
+          classId: '7A',
+          durationMinutes: 45,
+          isScheduled: true,
+          startTime: new Date(Date.now() - 3600000).toISOString().slice(0, 16),
+          endTime: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 16),
+          createdAt: new Date().toISOString(),
+          questions: [
+            {
+              id: 'q-med-1',
+              text: 'Perhatikan gambar bangun datar berikut. Jika panjang sisi sejajar masing-masing 10 cm dan 22 cm, serta tingginya 8 cm, berapakah luas bangun trapesium tersebut?',
+              options: ['128 cm²', '144 cm²', '160 cm²', '176 cm²'],
+              correctOptionIndex: 0,
+              points: 25,
+              imageUrl: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?auto=format&fit=crop&w=800&q=80',
+              explanation: 'Rumus Luas Trapesium = ½ × (a + b) × t = ½ × (10 + 22) × 8 = ½ × 32 × 8 = 128 cm².'
+            },
+            {
+              id: 'q-med-2',
+              text: 'Simak video penjelasan konsep geometri berikut. Berdasarkan prinsip segitiga siku-siku, jika alas 6 cm dan tinggi 8 cm, berapakah panjang sisi miringnya?',
+              options: ['9 cm', '10 cm', '12 cm', '14 cm'],
+              correctOptionIndex: 1,
+              points: 25,
+              videoUrl: 'https://www.youtube.com/watch?v=AA6RfgP-AHU',
+              explanation: 'c = √(6² + 8²) = √(36 + 64) = √100 = 10 cm.'
+            },
+            {
+              id: 'q-med-3',
+              text: 'Dengarkan rekaman instrumen audio listening berikut. Berapakah hasil perhitungan aljabar dari 12 dikali 3?',
+              options: ['24 butir', '36 butir', '48 butir', '60 butir'],
+              correctOptionIndex: 1,
+              points: 25,
+              audioUrl: 'https://actions.google.com/sounds/v1/science/ambient_music.ogg',
+              explanation: 'Hasil perhitungan adalah 12 × 3 = 36.'
+            },
+            {
+              id: 'q-med-4',
+              text: 'Bentuk paling sederhana dari aljabar 5x + 3y - 2x + 7y adalah...',
+              options: ['3x + 10y', '7x + 10y', '3x - 4y', '10x + 3y'],
+              correctOptionIndex: 0,
+              points: 25,
+              explanation: 'Suku sejenis dikelompokkan: (5x - 2x) + (3y + 7y) = 3x + 10y.'
+            }
+          ]
+        }
+      ] as Quiz[],
       quizResults: [] as QuizResult[],
 
       // Actions
