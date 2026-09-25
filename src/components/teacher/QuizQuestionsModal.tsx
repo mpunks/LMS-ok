@@ -16,10 +16,13 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Eye
+  Eye,
+  CloudCheck,
+  RefreshCw
 } from 'lucide-react';
 import { Quiz, Question } from '@/types';
 import { useDataStore } from '@/store/dataStore';
+import { useGasStore } from '@/store/gasStore';
 import { toast } from '@/components/ui/Toast';
 import QuestionEditorModal from './QuestionEditorModal';
 import ImportQuestionsModal from './ImportQuestionsModal';
@@ -36,7 +39,8 @@ export default function QuizQuestionsModal({
   onClose,
   quiz
 }: QuizQuestionsModalProps) {
-  const { updateQuiz } = useDataStore();
+  const { updateQuiz, syncQuizToGas } = useDataStore();
+  const { isConnected } = useGasStore();
   const questions: Question[] = quiz.questions || [];
 
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
@@ -44,6 +48,7 @@ export default function QuizQuestionsModal({
   const [showImportModal, setShowImportModal] = useState(false);
   const [expandedMediaQuestionId, setExpandedMediaQuestionId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSyncingToGas, setIsSyncingToGas] = useState(false);
 
   if (!isOpen) return null;
 
@@ -120,10 +125,36 @@ export default function QuizQuestionsModal({
       const finalQuestions = mode === 'REPLACE' ? imported : [...questions, ...imported];
       await updateQuiz(quiz.id, { questions: finalQuestions });
       setShowImportModal(false);
+      if (isConnected) {
+        toast.success(`Berhasil mengimpor ${imported.length} butir soal dan data tersimpan di Google Sheet!`);
+      } else {
+        toast.success(`Berhasil mengimpor ${imported.length} butir soal (Tersimpan di browser lokal)`);
+      }
     } catch (error: any) {
       toast.error(error.message || 'Gagal mengimpor soal');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Manual Sync this Quiz & Questions to Google Sheet
+  const handleManualSyncToGas = async () => {
+    if (!isConnected) {
+      toast.error('Webhook Google Sheets belum terhubung. Silakan buka menu Integrasi GAS untuk memasukkan URL Webhook.');
+      return;
+    }
+    setIsSyncingToGas(true);
+    try {
+      const res = await syncQuizToGas(quiz.id);
+      if (res && res.success) {
+        toast.success(`Berhasil! ${questions.length} butir soal kuis ini telah tersimpan di Google Sheet (Sheet 'Quizzes' & 'QuizQuestions').`);
+      } else {
+        toast.error(res?.error || 'Gagal menyinkronkan butir soal ke Google Sheet');
+      }
+    } catch (err: any) {
+      toast.error('Gagal sinkronisasi: ' + err?.message);
+    } finally {
+      setIsSyncingToGas(false);
     }
   };
 
@@ -156,13 +187,22 @@ export default function QuizQuestionsModal({
               <HelpCircle className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg font-bold text-slate-900">
                   Kelola Butir Soal: {quiz.title}
                 </h2>
                 <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
                   Kelas {quiz.classId}
                 </span>
+                {isConnected ? (
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                    <CloudCheck className="w-3 h-3 text-emerald-600" /> Google Sheet Terhubung
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                    Penyimpanan Lokal Browser
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 Total: <strong>{questions.length} Soal</strong> • Total Bobot Nilai: <strong>{totalPoints} Poin</strong> • Durasi: <strong>{quiz.durationMinutes} Menit</strong>
@@ -187,9 +227,29 @@ export default function QuizQuestionsModal({
             <span className="text-xs font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg">
               {questions.length} Butir Soal
             </span>
+            {isSaving && (
+              <span className="text-xs text-indigo-600 animate-pulse font-medium">
+                Menyimpan...
+              </span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {isConnected && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleManualSyncToGas}
+                isLoading={isSyncingToGas}
+                className="gap-1.5 text-xs text-emerald-700 border-emerald-300 hover:bg-emerald-50 bg-emerald-50/50"
+                title="Pastikan seluruh butir soal kuis ini tersimpan di Google Sheet sekarang"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingToGas ? 'animate-spin' : ''}`} />
+                Sinkronkan ke Google Sheet
+              </Button>
+            )}
+
             <Button
               type="button"
               variant="outline"

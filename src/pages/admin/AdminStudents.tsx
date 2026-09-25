@@ -16,10 +16,13 @@ import {
   Check,
   ArrowUpCircle,
   Sparkles,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw,
+  CloudCheck
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
+import { useGasStore } from '@/store/gasStore';
 import ImportUsersModal from '@/components/admin/ImportUsersModal';
 import PromotionModal from '@/components/admin/PromotionModal';
 import DeleteAllStudentsModal from '@/components/admin/DeleteAllStudentsModal';
@@ -50,6 +53,8 @@ export default function AdminStudents() {
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
   const [isDeduplicating, setIsDeduplicating] = useState(false);
+  const [isSyncingUsers, setIsSyncingUsers] = useState(false);
+  const { isConnected, executeAction } = useGasStore();
   
   const [formData, setFormData] = useState<{
     id: string;
@@ -209,16 +214,60 @@ export default function AdminStudents() {
     }
   };
 
+  const handleSyncUsersToGas = async () => {
+    if (!isConnected) {
+      toast.error('Webhook Google Sheets belum terhubung. Konfigurasikan Webhook di menu Integrasi GAS.');
+      return;
+    }
+    setIsSyncingUsers(true);
+    try {
+      const res = await executeAction('setAllUsers', { users });
+      if (res && res.success) {
+        toast.success(`Berhasil! ${users.length} data guru & siswa telah tersimpan di sheet 'Users' Google Sheets.`);
+      } else {
+        toast.error(res?.error || 'Gagal sinkronisasi pengguna ke Google Sheet');
+      }
+    } catch (err: any) {
+      toast.error('Gagal: ' + err?.message);
+    } finally {
+      setIsSyncingUsers(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Data Guru & Siswa</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-900">Data Guru & Siswa</h1>
+            {isConnected ? (
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                <CloudCheck className="w-3 h-3 text-emerald-600" /> Google Sheet Aktif
+              </span>
+            ) : (
+              <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                Penyimpanan Lokal
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-500 mt-1">
             Pengelolaan profil pengajar, mata pelajaran ampuan, jenis kelamin (L/P), dan data rombongan belajar siswa.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {isConnected && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 shrink-0 border-emerald-300 text-emerald-800 bg-emerald-50 hover:bg-emerald-100"
+              onClick={handleSyncUsersToGas}
+              disabled={isSyncingUsers}
+              title="Kirim dan sinkronkan seluruh data pengguna saat ini ke Google Sheet"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingUsers ? 'animate-spin' : ''}`} />
+              {isSyncingUsers ? 'Menyinkronkan...' : 'Sinkronkan ke Google Sheet'}
+            </Button>
+          )}
           {activeTab === 'students' && (
             <>
               {duplicateStudentCount > 0 && (
@@ -675,6 +724,9 @@ export default function AdminStudents() {
         defaultRole={activeTab === 'teachers' ? 'TEACHER' : 'STUDENT'}
         onImportSuccess={async (newUsers) => {
           await addUsers(newUsers);
+          if (isConnected) {
+            toast.success(`Berhasil! ${newUsers.length} data telah diimpor dan otomatis disimpan ke Google Sheet.`);
+          }
         }}
       />
     </div>

@@ -2,39 +2,45 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Copy, CheckCircle2, Server, Download, ShieldAlert, Database } from 'lucide-react';
+import { Copy, CheckCircle2, Server, Download, ShieldAlert, Database, RefreshCw, CloudCheck, AlertTriangle } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useGasStore } from '@/store/gasStore';
+import { useDataStore } from '@/store/dataStore';
 
 const GENERATED_GAS_CODE = `/**
- * SmartLMS SMP - Google Apps Script Backend
- * Salin dan tempel kode ini ke editor Google Apps Script Anda.
+ * SmartLMS SMP - Google Apps Script Backend (v2 - Full Questions & CBT Sync)
+ * Salin dan tempel kode ini ke editor Google Apps Script Anda (Code.gs).
  */
+
+function getOrCreateSheet(ss, name, headers) {
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+  if (sheet.getLastRow() === 0 && headers && headers.length > 0) {
+    sheet.appendRow(headers);
+  }
+  return sheet;
+}
 
 function setupAllTables() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheets = {
     'Users': ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password'],
     'Materials': ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt'],
-    'Quizzes': ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'createdAt'],
-    'QuizResults': ['id', 'quizId', 'studentId', 'score', 'submittedAt'],
+    'Quizzes': ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt'],
+    'QuizQuestions': ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'],
+    'QuizResults': ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt'],
     'Assignments': ['studentId', 'materialId', 'link', 'submittedAt'],
     'StudentProgress': ['studentId', 'materialId', 'readAt']
   };
   
   for (const [name, headers] of Object.entries(sheets)) {
-    let sheet = ss.getSheetByName(name);
-    if (!sheet) {
-      sheet = ss.insertSheet(name);
-    }
-    // Add headers if empty
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(headers);
-    }
+    getOrCreateSheet(ss, name, headers);
   }
   
   initSuperAdminScriptProperties();
-  return "Setup Complete & Tables Generated";
+  return "Setup Berhasil! Semua Tabel Termasuk Butir Soal Kuis (QuizQuestions) Telah Digenerasi.";
 }
 
 function initSuperAdminScriptProperties() {
@@ -45,11 +51,92 @@ function initSuperAdminScriptProperties() {
 
 function findRowIndex(sheet, idColIndex, idVal) {
   if (!sheet) return -1;
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][idColIndex] === idVal) return i + 1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  const data = sheet.getRange(2, idColIndex + 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === String(idVal)) return i + 2;
   }
   return -1;
+}
+
+function saveQuizQuestions(ss, quiz) {
+  if (!quiz || !quiz.id) return;
+  const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', [
+    'id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'
+  ]);
+  
+  // Hapus butir soal lama untuk quizId ini
+  const lastRow = qqSheet.getLastRow();
+  if (lastRow > 1) {
+    const data = qqSheet.getRange(2, 2, lastRow - 1, 1).getValues(); // Kolom B adalah quizId
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (String(data[i][0]) === String(quiz.id)) {
+        qqSheet.deleteRow(i + 2);
+      }
+    }
+  }
+  
+  // Simpan butir soal baru
+  const questions = quiz.questions || [];
+  if (questions.length > 0) {
+    const rows = questions.map(function(q, idx) {
+      const opts = Array.isArray(q.options) ? q.options : [];
+      return [
+        q.id || ('q-' + (idx + 1)),
+        quiz.id,
+        quiz.title || '',
+        idx + 1,
+        q.text || '',
+        opts[0] || '',
+        opts[1] || '',
+        opts[2] || '',
+        opts[3] || '',
+        opts[4] || '',
+        q.correctOptionIndex !== undefined ? q.correctOptionIndex : 0,
+        q.points || 0,
+        q.imageUrl || '',
+        q.videoUrl || '',
+        q.audioUrl || '',
+        q.explanation || '',
+        new Date().toISOString()
+      ];
+    });
+    qqSheet.getRange(qqSheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  }
+}
+
+function saveOrUpdateQuiz(ss, quiz) {
+  if (!quiz || !quiz.id) return;
+  const qSheet = getOrCreateSheet(ss, 'Quizzes', [
+    'id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt'
+  ]);
+  
+  const questions = quiz.questions || [];
+  const qRow = [
+    quiz.id,
+    quiz.materialId || '',
+    quiz.classId || '',
+    quiz.subjectId || '',
+    quiz.title || '',
+    quiz.durationMinutes || 45,
+    quiz.isScheduled ? 'TRUE' : 'FALSE',
+    quiz.startTime || '',
+    quiz.endTime || '',
+    questions.length,
+    JSON.stringify(questions),
+    quiz.createdAt || new Date().toISOString()
+  ];
+  
+  const rowIdx = findRowIndex(qSheet, 0, quiz.id);
+  if (rowIdx > -1) {
+    qSheet.getRange(rowIdx, 1, 1, qRow.length).setValues([qRow]);
+  } else {
+    qSheet.appendRow(qRow);
+  }
+  
+  // Sinkronkan setiap butir soal ke tabel QuizQuestions
+  saveQuizQuestions(ss, quiz);
 }
 
 function doPost(e) {
@@ -127,12 +214,12 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Kredensial tidak valid' })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // CRUD Handlers
+    // CRUD Handlers - Users
     if (action === 'addUser') {
       const u = data.user;
       const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
       const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
-      ss.getSheetByName('Users').appendRow([
+      getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']).appendRow([
         u.id, 
         u.role, 
         u.name, 
@@ -147,16 +234,16 @@ function doPost(e) {
       ]);
     } 
     else if (action === 'setAllUsers') {
-      const sheet = ss.getSheetByName('Users');
-      if (sheet) {
-        if (sheet.getLastRow() > 1) {
-          sheet.deleteRows(2, sheet.getLastRow() - 1);
-        }
-        const userList = data.users || [];
-        userList.forEach(u => {
+      const sheet = getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']);
+      if (sheet.getLastRow() > 1) {
+        sheet.deleteRows(2, sheet.getLastRow() - 1);
+      }
+      const userList = data.users || [];
+      if (userList.length > 0) {
+        const rows = userList.map(function(u) {
           const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
           const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
-          sheet.appendRow([
+          return [
             u.id, 
             u.role, 
             u.name, 
@@ -168,20 +255,20 @@ function doPost(e) {
             u.classId || '', 
             assigned, 
             pass
-          ]);
+          ];
         });
+        sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       }
     }
     else if (action === 'addUsers') {
-      const sheet = ss.getSheetByName('Users');
+      const sheet = getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']);
       const userList = data.users || [];
       const existingData = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
       
-      userList.forEach(u => {
+      userList.forEach(function(u) {
         const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
         const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
         
-        // Find if already exists in Sheet (row 2 onwards)
         let foundRow = -1;
         for (let r = 1; r < existingData.length; r++) {
           const rowId = String(existingData[r][0]);
@@ -203,7 +290,6 @@ function doPost(e) {
         }
 
         if (foundRow > -1) {
-          // Update existing row
           sheet.getRange(foundRow, 3).setValue(u.name);
           sheet.getRange(foundRow, 4).setValue(u.gender || 'L');
           sheet.getRange(foundRow, 5).setValue(u.subject || '');
@@ -258,10 +344,13 @@ function doPost(e) {
       const rowIdx = findRowIndex(sheet, 0, data.id);
       if (rowIdx > -1) sheet.getRange(rowIdx, 11).setValue(data.password);
     }
+
+    // CRUD Handlers - Materials
     else if (action === 'addMaterial') {
       const m = data.material;
       const url = m.pdfUrl || m.youtubeUrl || m.linkUrl || '';
-      ss.getSheetByName('Materials').appendRow([m.id, m.classId, m.subjectId, m.teacherId, m.title, m.content || '', m.type, url, m.chapter, m.order, m.semester, m.createdAt]);
+      getOrCreateSheet(ss, 'Materials', ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt'])
+        .appendRow([m.id, m.classId, m.subjectId, m.teacherId, m.title, m.content || '', m.type, url, m.chapter, m.order, m.semester, m.createdAt]);
     }
     else if (action === 'updateMaterial') {
       const sheet = ss.getSheetByName('Materials');
@@ -279,83 +368,161 @@ function doPost(e) {
       const rowIdx = findRowIndex(sheet, 0, data.id);
       if (rowIdx > -1) sheet.deleteRow(rowIdx);
     }
-    else if (action === 'addQuiz') {
+
+    // CRUD Handlers - Quizzes & Questions
+    else if (action === 'addQuiz' || action === 'saveQuiz') {
       const q = data.quiz;
-      ss.getSheetByName('Quizzes').appendRow([q.id, q.materialId || '', q.classId || '', q.subjectId || '', q.title, q.durationMinutes, q.createdAt]);
+      saveOrUpdateQuiz(ss, q);
     }
     else if (action === 'updateQuiz') {
-      const sheet = ss.getSheetByName('Quizzes');
-      const rowIdx = findRowIndex(sheet, 0, data.id);
-      if (rowIdx > -1) {
-        const q = data.data;
-        if (q.title) sheet.getRange(rowIdx, 5).setValue(q.title);
-        if (q.durationMinutes) sheet.getRange(rowIdx, 6).setValue(q.durationMinutes);
+      const quiz = data.quiz;
+      if (quiz && quiz.id) {
+        saveOrUpdateQuiz(ss, quiz);
+      } else {
+        const sheet = getOrCreateSheet(ss, 'Quizzes', ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt']);
+        const rowIdx = findRowIndex(sheet, 0, data.id);
+        const q = data.data || {};
+        if (rowIdx > -1) {
+          if (q.title !== undefined) sheet.getRange(rowIdx, 5).setValue(q.title);
+          if (q.durationMinutes !== undefined) sheet.getRange(rowIdx, 6).setValue(q.durationMinutes);
+          if (q.isScheduled !== undefined) sheet.getRange(rowIdx, 7).setValue(q.isScheduled ? 'TRUE' : 'FALSE');
+          if (q.startTime !== undefined) sheet.getRange(rowIdx, 8).setValue(q.startTime);
+          if (q.endTime !== undefined) sheet.getRange(rowIdx, 9).setValue(q.endTime);
+          if (q.questions !== undefined) {
+            sheet.getRange(rowIdx, 10).setValue(q.questions.length);
+            sheet.getRange(rowIdx, 11).setValue(JSON.stringify(q.questions));
+            saveQuizQuestions(ss, { id: data.id, title: q.title || '', questions: q.questions });
+          }
+        }
+      }
+    }
+    else if (action === 'syncQuizQuestions') {
+      const quiz = data.quiz;
+      if (quiz) {
+        saveOrUpdateQuiz(ss, quiz);
       }
     }
     else if (action === 'deleteQuiz') {
       const sheet = ss.getSheetByName('Quizzes');
-      const rowIdx = findRowIndex(sheet, 0, data.id);
-      if (rowIdx > -1) sheet.deleteRow(rowIdx);
+      if (sheet) {
+        const rowIdx = findRowIndex(sheet, 0, data.id);
+        if (rowIdx > -1) sheet.deleteRow(rowIdx);
+      }
+      const qqSheet = ss.getSheetByName('QuizQuestions');
+      if (qqSheet && qqSheet.getLastRow() > 1) {
+        const dataRows = qqSheet.getRange(2, 2, qqSheet.getLastRow() - 1, 1).getValues();
+        for (let i = dataRows.length - 1; i >= 0; i--) {
+          if (String(dataRows[i][0]) === String(data.id)) {
+            qqSheet.deleteRow(i + 2);
+          }
+        }
+      }
+    }
+    else if (action === 'submitQuiz') {
+      const r = data.result;
+      const resSheet = getOrCreateSheet(ss, 'QuizResults', ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt']);
+      resSheet.appendRow([
+        r.id,
+        r.quizId,
+        r.studentId,
+        r.score,
+        r.finalScore !== undefined ? r.finalScore : r.score,
+        r.violationsCount || 0,
+        JSON.stringify(r.answers || {}),
+        r.submittedAt || new Date().toISOString()
+      ]);
     }
     else if (action === 'submitAssignment') {
-      ss.getSheetByName('Assignments').appendRow([data.studentId, data.materialId, data.link, new Date().toISOString()]);
+      getOrCreateSheet(ss, 'Assignments', ['studentId', 'materialId', 'link', 'submittedAt'])
+        .appendRow([data.studentId, data.materialId, data.link, new Date().toISOString()]);
     }
     else if (action === 'markMaterialAsRead') {
-      ss.getSheetByName('StudentProgress').appendRow([data.studentId, data.materialId, new Date().toISOString()]);
+      getOrCreateSheet(ss, 'StudentProgress', ['studentId', 'materialId', 'readAt'])
+        .appendRow([data.studentId, data.materialId, new Date().toISOString()]);
     }
+    
+    // Sinkronisasi Massal Seluruh Data (Users, Quizzes, Questions, Materials)
+    else if (action === 'syncAllData') {
+      // 1. Users
+      if (data.users && Array.isArray(data.users)) {
+        const uSheet = getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']);
+        if (uSheet.getLastRow() > 1) {
+          uSheet.deleteRows(2, uSheet.getLastRow() - 1);
+        }
+        if (data.users.length > 0) {
+          const userRows = data.users.map(function(u) {
+            const pass = u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username));
+            const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
+            return [
+              u.id, 
+              u.role, 
+              u.name, 
+              u.gender || 'L', 
+              u.subject || '', 
+              u.username || '', 
+              u.nik || '', 
+              u.nisn || '', 
+              u.classId || '', 
+              assigned, 
+              pass
+            ];
+          });
+          uSheet.getRange(2, 1, userRows.length, userRows[0].length).setValues(userRows);
+        }
+      }
+      // 2. Quizzes & QuizQuestions
+      if (data.quizzes && Array.isArray(data.quizzes)) {
+        const qSheet = getOrCreateSheet(ss, 'Quizzes', ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt']);
+        if (qSheet.getLastRow() > 1) {
+          qSheet.deleteRows(2, qSheet.getLastRow() - 1);
+        }
+        const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt']);
+        if (qqSheet.getLastRow() > 1) {
+          qqSheet.deleteRows(2, qqSheet.getLastRow() - 1);
+        }
+        data.quizzes.forEach(function(quiz) {
+          saveOrUpdateQuiz(ss, quiz);
+        });
+      }
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        message: 'Seluruh data pengguna, kuis, dan butir soal berhasil disinkronkan ke Google Sheet!' 
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Clear Database (Super Admin)
     else if (action === 'clearDatabase') {
       const targets = data.targets || [];
       const isAll = targets.indexOf('All') > -1;
 
-      // Clear Materials
       if (isAll || targets.indexOf('Materials') > -1) {
         const sheet = ss.getSheetByName('Materials');
-        if (sheet && sheet.getLastRow() > 1) {
-          sheet.deleteRows(2, sheet.getLastRow() - 1);
-        }
+        if (sheet && sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
       }
-
-      // Clear Quizzes
       if (isAll || targets.indexOf('Quizzes') > -1) {
         const sheet = ss.getSheetByName('Quizzes');
-        if (sheet && sheet.getLastRow() > 1) {
-          sheet.deleteRows(2, sheet.getLastRow() - 1);
-        }
+        if (sheet && sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+        const qqSheet = ss.getSheetByName('QuizQuestions');
+        if (qqSheet && qqSheet.getLastRow() > 1) qqSheet.deleteRows(2, qqSheet.getLastRow() - 1);
       }
-
-      // Clear QuizResults
       if (isAll || targets.indexOf('QuizResults') > -1) {
         const sheet = ss.getSheetByName('QuizResults');
-        if (sheet && sheet.getLastRow() > 1) {
-          sheet.deleteRows(2, sheet.getLastRow() - 1);
-        }
+        if (sheet && sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
       }
-
-      // Clear Assignments
       if (isAll || targets.indexOf('Assignments') > -1) {
         const sheet = ss.getSheetByName('Assignments');
-        if (sheet && sheet.getLastRow() > 1) {
-          sheet.deleteRows(2, sheet.getLastRow() - 1);
-        }
+        if (sheet && sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
       }
-
-      // Clear StudentProgress
       if (isAll || targets.indexOf('StudentProgress') > -1) {
         const sheet = ss.getSheetByName('StudentProgress');
-        if (sheet && sheet.getLastRow() > 1) {
-          sheet.deleteRows(2, sheet.getLastRow() - 1);
-        }
+        if (sheet && sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
       }
-
-      // Clear Users (Students/Teachers, protecting Super Admin)
       const userSheet = ss.getSheetByName('Users');
       if (userSheet && userSheet.getLastRow() > 1) {
         const rows = userSheet.getDataRange().getValues();
-        // Traverse backwards from bottom up to row 2
         for (let r = rows.length - 1; r >= 1; r--) {
           const role = String(rows[r][1]).trim();
-          if (role === 'SUPER_ADMIN') continue; // Always preserve SUPER_ADMIN!
-          
+          if (role === 'SUPER_ADMIN') continue;
           let shouldDel = false;
           if (isAll) {
             shouldDel = (role !== 'SUPER_ADMIN');
@@ -363,9 +530,7 @@ function doPost(e) {
             if (targets.indexOf('Students') > -1 && role === 'STUDENT') shouldDel = true;
             if (targets.indexOf('Teachers') > -1 && role === 'TEACHER') shouldDel = true;
           }
-          if (shouldDel) {
-            userSheet.deleteRow(r + 1);
-          }
+          if (shouldDel) userSheet.deleteRow(r + 1);
         }
       }
     }
@@ -377,15 +542,21 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("SmartLMS Webhook Active").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("SmartLMS Webhook Active & Ready").setMimeType(ContentService.MimeType.TEXT);
 }`;
 
 export default function GASConfig() {
-  const { webhookUrl, setWebhookUrl, testConnection, isConnected, executeAction } = useGasStore();
+  const { webhookUrl, setWebhookUrl, testConnection, isConnected, executeAction, lastSyncTime, lastSyncSuccess, lastSyncMessage } = useGasStore();
+  const { users, quizzes, materials, syncAllToGas } = useDataStore();
   const [url, setUrl] = useState(webhookUrl);
   const [isTesting, setIsTesting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const totalQuestions = quizzes.reduce((acc, q) => acc + (q.questions?.length || 0), 0);
+  const totalStudents = users.filter(u => u.role === 'STUDENT').length;
+  const totalTeachers = users.filter(u => u.role === 'TEACHER').length;
 
   const handleTest = async () => {
     const cleanUrl = url?.trim() || '';
@@ -411,7 +582,7 @@ export default function GASConfig() {
   const handleCopyCode = () => {
     navigator.clipboard.writeText(GENERATED_GAS_CODE);
     setCopied(true);
-    toast.success('Kode berhasil disalin');
+    toast.success('Kode Google Apps Script berhasil disalin!');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -424,20 +595,80 @@ export default function GASConfig() {
     try {
       const res = await executeAction('setupAllTables');
       if (res.success) {
-        toast.success('Berhasil! Semua tabel telah digenerasi otomatis di Google Sheets.');
+        toast.success('Berhasil! Semua tabel (termasuk QuizQuestions) telah dibuat di Google Sheets.');
       } else {
         toast.error('Gagal: ' + (res.error || 'Terjadi kesalahan'));
       }
-    } catch (e) {
-      toast.error('Gagal memproses permintaan.');
+    } catch (e: any) {
+      toast.error('Gagal memproses permintaan: ' + e?.message);
     }
     setIsGenerating(false);
+  };
+
+  const handleSyncAllNow = async () => {
+    if (!isConnected) {
+      toast.error('Webhook Google Sheets belum terhubung. Silakan tes koneksi terlebih dahulu.');
+      return;
+    }
+    setIsSyncingAll(true);
+    try {
+      const res = await syncAllToGas();
+      if (res && res.success) {
+        toast.success(`Berhasil! ${users.length} Pengguna, ${quizzes.length} Kuis, dan ${totalQuestions} Butir Soal telah tersimpan ke Google Sheet.`);
+      } else {
+        toast.error(res?.error || 'Gagal melakukan sinkronisasi ke Google Sheet');
+      }
+    } catch (err: any) {
+      toast.error('Terjadi kesalahan sinkronisasi: ' + err?.message);
+    } finally {
+      setIsSyncingAll(false);
+    }
   };
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Integrasi Google Sheets (GAS)</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Integrasi Google Sheets (GAS)</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            Persistensi cloud dua arah untuk data siswa, guru, materi, dan butir soal kuis dengan Google Spreadsheet.
+          </p>
+        </div>
+      </div>
+
+      {/* Sync Status Banner */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-lg">
+            {users.length}
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">Pengguna Tersimpan</div>
+            <div className="text-sm font-semibold text-slate-800">{totalStudents} Siswa, {totalTeachers} Guru</div>
+          </div>
+        </div>
+
+        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-lg">
+            {quizzes.length}
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">Kuis & CBT Aktif</div>
+            <div className="text-sm font-semibold text-slate-800">{totalQuestions} Butir Soal Siap Ujian</div>
+          </div>
+        </div>
+
+        <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isConnected ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+            {isConnected ? <CheckCircle2 className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">Status Google Sheets</div>
+            <div className={`text-sm font-semibold ${isConnected ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {isConnected ? 'Terhubung & Aktif' : 'Belum Terhubung'}
+            </div>
+          </div>
+        </div>
       </div>
 
       <Card>
@@ -449,9 +680,9 @@ export default function GASConfig() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-slate-600">
-            Masukkan URL Web App dari Google Apps Script yang telah Anda deploy. Format URL biasanya diawali dengan <code>https://script.google.com/macros/s/...</code>
+            Masukkan URL Web App dari Google Apps Script yang telah Anda deploy. Format URL diawali dengan <code>https://script.google.com/macros/s/...</code>
           </p>
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-3">
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -464,30 +695,53 @@ export default function GASConfig() {
           </div>
 
           <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800 space-y-1">
-            <p className="font-semibold text-amber-900">Tips Penting Agar Tidak Terjadi "Failed to fetch":</p>
+            <p className="font-semibold text-amber-900">Tips Penting Agar Data Tersimpan Nyata di Google Sheets:</p>
             <ul className="list-disc list-inside space-y-0.5">
               <li>Saat <strong>Deploy &gt; New deployment &gt; Web app</strong> di Google Apps Script:</li>
               <li><strong>Execute as:</strong> Pilih <em>Me (email Anda)</em>.</li>
-              <li><strong>Who has access:</strong> Wajib pilih <strong><em>Anyone (Siapa saja)</em></strong>. Jangan pilih &quot;Only myself&quot; karena browser akan memblokir request dengan error <em>Failed to fetch</em>.</li>
+              <li><strong>Who has access:</strong> Wajib pilih <strong><em>Anyone (Siapa saja)</em></strong>.</li>
               <li>Pastikan URL berakhiran <code>/exec</code> (bukan <code>/dev</code>).</li>
+              <li>Jika ada pembaruan kode di <code>Code.gs</code>, lakukan <strong>Deploy &gt; Manage deployments &gt; Edit (ikon pensil) &gt; New version &gt; Deploy</strong> agar script Google Sheet memakai versi terbaru!</li>
             </ul>
           </div>
+
           {isConnected && (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-emerald-50 p-4 rounded-lg border border-emerald-100">
-              <div className="flex items-center gap-2 text-emerald-700 text-sm font-medium">
-                <CheckCircle2 className="w-5 h-5" />
-                Webhook terhubung dan aktif
+            <div className="space-y-3 bg-emerald-50/70 p-4 rounded-xl border border-emerald-200">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-emerald-800 text-sm font-semibold">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span>Webhook Google Sheet Terhubung dan Aktif</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleGenerateTables} 
+                    isLoading={isGenerating}
+                    className="border-emerald-300 text-emerald-800 hover:bg-emerald-100 bg-white"
+                  >
+                    <Database className="w-4 h-4 mr-1.5 text-emerald-600" />
+                    Buat / Update Struktur Tabel
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    onClick={handleSyncAllNow} 
+                    isLoading={isSyncingAll}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+                  >
+                    <RefreshCw className={`w-4 h-4 mr-1.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
+                    Sinkronkan Seluruh Data Sekarang
+                  </Button>
+                </div>
               </div>
-              <Button 
-                variant="primary" 
-                size="sm" 
-                onClick={handleGenerateTables} 
-                isLoading={isGenerating}
-                className="bg-emerald-600 hover:bg-emerald-700"
-              >
-                <Database className="w-4 h-4 mr-2" />
-                Eksekusi Pembuatan Tabel Otomatis
-              </Button>
+
+              {lastSyncTime && (
+                <div className="text-[11px] text-emerald-700 flex items-center gap-1.5 pt-1 border-t border-emerald-200/60">
+                  <span className="font-semibold">Sinkronisasi terakhir:</span>
+                  <span>{new Date(lastSyncTime).toLocaleString('id-ID')}</span>
+                  {lastSyncMessage && <span className="text-emerald-800">({lastSyncMessage})</span>}
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -498,20 +752,20 @@ export default function GASConfig() {
           <CardTitle className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShieldAlert className="w-5 h-5 text-indigo-600" />
-              Generator Kode Apps Script
+              Kode Backend Google Apps Script (Code.gs)
             </div>
             <Button variant="outline" size="sm" onClick={handleCopyCode} className="gap-2">
               {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
-              {copied ? 'Tersalin' : 'Salin Kode'}
+              {copied ? 'Tersalin' : 'Salin Seluruh Kode'}
             </Button>
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-slate-600 mb-4">
-            Buat project baru di <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Google Apps Script</a>. Salin kode di bawah ini ke dalam <code>Code.gs</code>, simpan, lalu jalankan fungsi <code>setupAllTables</code> sekali untuk inisialisasi sheet dan super admin. Setelah itu, Deploy sebagai Web App.
+            Buka spreadsheet Anda di <a href="https://sheets.new" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline font-semibold">Google Sheets</a> &gt; Menu <strong>Ekstensi (Extensions)</strong> &gt; <strong>Apps Script</strong>. Ganti semua isi berkas <code>Code.gs</code> dengan kode di bawah ini, lalu jalankan fungsi <code>setupAllTables</code> sekali untuk inisialisasi sheet dan super admin. Setelah itu, <strong>Deploy sebagai Web App</strong>.
           </p>
           <div className="relative">
-            <pre className="bg-slate-900 text-slate-50 p-4 rounded-lg overflow-x-auto text-sm font-mono leading-relaxed h-[400px]">
+            <pre className="bg-slate-900 text-slate-50 p-4 rounded-lg overflow-x-auto text-xs font-mono leading-relaxed h-[420px]">
               <code>{GENERATED_GAS_CODE}</code>
             </pre>
           </div>
@@ -520,3 +774,4 @@ export default function GASConfig() {
     </div>
   );
 }
+

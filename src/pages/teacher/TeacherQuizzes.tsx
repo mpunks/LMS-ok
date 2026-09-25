@@ -17,11 +17,14 @@ import {
   Calendar,
   HelpCircle,
   Upload,
-  CalendarClock
+  CalendarClock,
+  RefreshCw,
+  CloudCheck
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
+import { useGasStore } from '@/store/gasStore';
 import { Quiz, QuizResult, User } from '@/types';
 import { ALL_SCHOOL_CLASSES } from '@/data/schoolClasses';
 import ViolationDetailModal from '@/components/teacher/ViolationDetailModal';
@@ -29,11 +32,13 @@ import QuizQuestionsModal from '@/components/teacher/QuizQuestionsModal';
 
 export default function TeacherQuizzes() {
   const { user } = useAuthStore();
-  const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users } = useDataStore();
+  const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users, syncAllToGas } = useDataStore();
+  const { isConnected } = useGasStore();
   const assignedClasses = user?.assignedClasses || [];
 
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
   
   const [formData, setFormData] = useState<{
     id: string;
@@ -177,32 +182,79 @@ export default function TeacherQuizzes() {
     }
   };
 
+  const handleSyncAllQuizzesToGas = async () => {
+    if (!isConnected) {
+      toast.error('Webhook Google Sheets belum terhubung. Silakan buka menu Integrasi GAS di panel Admin.');
+      return;
+    }
+    setIsSyncingAll(true);
+    try {
+      const res = await syncAllToGas();
+      if (res && res.success) {
+        const qCount = quizzes.reduce((acc, q) => acc + (q.questions?.length || 0), 0);
+        toast.success(`Berhasil! ${quizzes.length} Kuis dan ${qCount} butir soal telah tersimpan di Google Sheet (Sheet 'Quizzes' & 'QuizQuestions').`);
+      } else {
+        toast.error(res?.error || 'Gagal menyinkronkan data kuis ke Google Sheet');
+      }
+    } catch (err: any) {
+      toast.error('Gagal sinkronisasi: ' + err?.message);
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Kelola Kuis & Ujian CBT</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-900">Kelola Kuis & Ujian CBT</h1>
+            {isConnected ? (
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                <CloudCheck className="w-3 h-3 text-emerald-600" /> Google Sheet Aktif
+              </span>
+            ) : (
+              <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                Penyimpanan Lokal
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-500 mt-0.5">
             Manajemen butir soal ujian (tambah, edit, hapus, impor Excel/Word), penjadwalan waktu mulai, dan pemantauan CBT
           </p>
         </div>
-        <Button className="gap-2 shrink-0 text-xs bg-indigo-600 hover:bg-indigo-700" onClick={() => {
-          setIsEdit(false);
-          setFormData({ 
-            id: '', 
-            title: '', 
-            subjectId: 'Matematika', 
-            classId: assignedClasses[0] || '7A', 
-            durationMinutes: 45, 
-            materialId: '',
-            isScheduled: false,
-            startTime: '',
-            endTime: ''
-          });
-          setShowForm(!showForm);
-        }}>
-          <Plus className="w-4 h-4" /> Buat Kuis Baru
-        </Button>
+        <div className="flex items-center gap-2">
+          {isConnected && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSyncAllQuizzesToGas}
+              disabled={isSyncingAll}
+              className="gap-1.5 text-xs text-emerald-800 border-emerald-300 bg-emerald-50 hover:bg-emerald-100"
+              title="Kirim dan sinkronkan seluruh kuis dan butir soal ke Google Sheet"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingAll ? 'animate-spin' : ''}`} />
+              {isSyncingAll ? 'Menyinkronkan...' : 'Sinkronkan ke Google Sheet'}
+            </Button>
+          )}
+          <Button className="gap-2 shrink-0 text-xs bg-indigo-600 hover:bg-indigo-700" onClick={() => {
+            setIsEdit(false);
+            setFormData({ 
+              id: '', 
+              title: '', 
+              subjectId: 'Matematika', 
+              classId: assignedClasses[0] || '7A', 
+              durationMinutes: 45, 
+              materialId: '',
+              isScheduled: false,
+              startTime: '',
+              endTime: ''
+            });
+            setShowForm(!showForm);
+          }}>
+            <Plus className="w-4 h-4" /> Buat Kuis Baru
+          </Button>
+        </div>
       </div>
 
       {showForm && (

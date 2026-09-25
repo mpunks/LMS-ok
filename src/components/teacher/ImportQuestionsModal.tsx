@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { Question } from '@/types';
+import { useGasStore } from '@/store/gasStore';
 
 interface ImportQuestionsModalProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ export default function ImportQuestionsModal({
   onImport,
   existingQuestionsCount = 0
 }: ImportQuestionsModalProps) {
+  const { isConnected } = useGasStore();
   const [activeTab, setActiveTab] = useState<'excel' | 'word'>('excel');
   const [importMode, setImportMode] = useState<'APPEND' | 'REPLACE'>('APPEND');
   
@@ -427,6 +429,24 @@ PEMBAHASAN: Suara rekaman audio menampilkan suasana alam luar ruangan (outdoor).
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* Google Sheet Sync Notice */}
+        <div className={`px-6 py-2.5 text-xs flex items-center justify-between border-b ${
+          isConnected 
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+            : 'bg-amber-50 text-amber-800 border-amber-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className={`w-4 h-4 shrink-0 ${isConnected ? 'text-emerald-600' : 'text-amber-600'}`} />
+            <span>
+              {isConnected ? (
+                <><strong>Tersambung ke Google Sheet:</strong> Seluruh soal yang diimpor akan langsung disimpan otomatis ke tabel <em>Quizzes</em> dan <em>QuizQuestions</em>.</>
+              ) : (
+                <><strong>Penyimpanan Browser Aktif:</strong> Webhook Google Sheet belum terhubung. Soal tersimpan di database lokal. Sambungkan di menu Integrasi GAS untuk pencadangan cloud.</>
+              )}
+            </span>
+          </div>
         </div>
 
         {/* Mode Selector & Tabs */}

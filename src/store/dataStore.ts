@@ -44,6 +44,8 @@ interface DataState {
   submitQuiz: (result: QuizResult) => Promise<void>;
   updateQuizResult: (id: string, data: Partial<QuizResult>) => Promise<void>;
   deleteQuizResult: (id: string) => Promise<void>;
+  syncQuizToGas: (quizId: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+  syncAllToGas: () => Promise<{ success: boolean; message?: string; error?: string }>;
 
   // Assignments
   submitAssignment: (studentId: string, materialId: string, link: string) => Promise<void>;
@@ -419,12 +421,35 @@ export const useDataStore = create<DataState>()(
         await syncToGas('addQuiz', { quiz });
       },
       updateQuiz: async (id: string, data: Partial<Quiz>) => {
-        set(state => ({ quizzes: state.quizzes.map(q => q.id === id ? { ...q, ...data } : q) }));
-        await syncToGas('updateQuiz', { id, data });
+        let fullUpdatedQuiz: Quiz | undefined;
+        set(state => {
+          const updatedQuizzes = state.quizzes.map(q => {
+            if (q.id === id) {
+              fullUpdatedQuiz = { ...q, ...data };
+              return fullUpdatedQuiz;
+            }
+            return q;
+          });
+          return { quizzes: updatedQuizzes };
+        });
+        if (fullUpdatedQuiz) {
+          await syncToGas('updateQuiz', { id, data, quiz: fullUpdatedQuiz });
+        }
       },
       deleteQuiz: async (id: string) => {
         set(state => ({ quizzes: state.quizzes.filter(q => q.id !== id) }));
         await syncToGas('deleteQuiz', { id });
+      },
+      syncQuizToGas: async (quizId: string) => {
+        const quiz = get().quizzes.find(q => q.id === quizId);
+        if (!quiz) return { success: false, error: 'Kuis tidak ditemukan' };
+        const res = await syncToGas('saveQuiz', { quiz });
+        return res;
+      },
+      syncAllToGas: async () => {
+        const { users, quizzes, materials } = get();
+        const res = await syncToGas('syncAllData', { users, quizzes, materials });
+        return res;
       },
       submitQuiz: async (result: QuizResult) => {
         set(state => ({ 
