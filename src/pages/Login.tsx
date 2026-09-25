@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BookOpen, KeyRound, User, Lock, RefreshCw, CloudCheck, Info } from 'lucide-react';
+import { BookOpen, KeyRound, User, Lock, RefreshCw, CloudCheck, Info, Database, CheckCircle2, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -9,6 +9,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useGasStore } from '@/store/gasStore';
 import { useDataStore } from '@/store/dataStore';
 import { toast } from '@/components/ui/Toast';
+import ConnectDatabaseModal from '@/components/common/ConnectDatabaseModal';
 
 export default function Login() {
   const [searchParams] = useSearchParams();
@@ -19,24 +20,34 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isPullingData, setIsPullingData] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
   const navigate = useNavigate();
   const { login } = useAuthStore();
-  const { webhookUrl, executeAction, fetchServerConfig, isConnected } = useGasStore();
+  const { webhookUrl, executeAction, fetchServerConfig, isConnected, testConnection } = useGasStore();
   const { users, addUser, pullAllFromGas, pullUsersFromGas, pullAllFromServer } = useDataStore();
 
   useEffect(() => {
     // Ensure central server database and Webhook URL are loaded in this browser
-    pullAllFromServer().catch(() => {});
-    fetchServerConfig().catch(() => {});
+    async function loadInitial() {
+      await pullAllFromServer().catch(() => {});
+      const serverUrl = await fetchServerConfig().catch(() => '');
+      if (serverUrl && serverUrl.includes('script.google.com/macros/s/')) {
+        testConnection().catch(() => {});
+      }
+    }
+    loadInitial();
   }, []);
+
+  const hasConfiguredWebhook = Boolean(webhookUrl && webhookUrl.includes('script.google.com/macros/s/'));
 
   const handleManualPull = async () => {
     setIsPullingData(true);
     try {
+      await fetch('/api/database/sync', { method: 'POST' }).catch(() => {});
       await pullAllFromServer().catch(() => {});
       await pullAllFromGas().catch(() => {});
       const total = useDataStore.getState().users.length;
-      toast.success(`Berhasil menyinkronkan data! ${total} akun kini siap digunakan untuk masuk.`);
+      toast.success(`Berhasil menyinkronkan database! ${total} akun pengguna siap digunakan.`);
     } catch (err: any) {
       toast.error('Gagal sinkronisasi data: ' + err?.message);
     } finally {
@@ -82,7 +93,6 @@ export default function Login() {
         
         if (res && res.success && res.user) {
           login(res.user);
-          // Persist user to local store & pull rest of quizzes/materials in background
           addUser(res.user).catch(() => {});
           pullAllFromGas().catch(() => {});
 
@@ -97,57 +107,67 @@ export default function Login() {
       }
     }
 
-    // 4. If online check didn't match or failed, try pulling latest users from server and GAS
-    if (!loginSuccess) {
+    // Helper matcher function
+    const findMatchedUser = (list: any[]) => {
+      return list.find(u => {
+        if (activeTab === 'teacher') {
+          const isStaff = u.role === 'TEACHER' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN';
+          const rowUser = (u.username || '').toLowerCase().trim();
+          const rowNik = (u.nik || '').trim();
+          const idMatched = (rowUser === cleanIdLower) || (rowNik === cleanInputId) || (u.id === cleanInputId);
+          
+          const passMatched = u.password 
+            ? (u.password === cleanInputPass) 
+            : (rowNik === cleanInputPass || cleanInputPass === '123456');
+          return isStaff && idMatched && passMatched;
+        } else {
+          const isStudent = u.role === 'STUDENT';
+          const rowNisn = (u.nisn || '').trim();
+          const rowNisnNoZero = rowNisn.replace(/^0+/, '');
+          const rowUser = (u.username || '').toLowerCase().trim();
+          
+          const idMatched = (rowNisn && (rowNisn === cleanInputId || rowNisnNoZero === cleanIdNoZero)) ||
+                            (rowUser && rowUser === cleanIdLower) ||
+                            (u.id === cleanInputId);
+          
+          const passMatched = u.password 
+            ? (u.password === cleanInputPass) 
+            : (rowNisn === cleanInputPass || rowNisnNoZero === cleanInputPass || cleanInputPass === '123456');
+          return isStudent && idMatched && passMatched;
+        }
+      });
+    };
+
+    // 4. Match against dataStore users
+    let latestUsers = useDataStore.getState().users;
+    let matchedUser = findMatchedUser(latestUsers);
+
+    // 5. If not matched, try querying server & Google Sheets in real-time!
+    if (!matchedUser) {
       await pullAllFromServer().catch(() => {});
-      if (activeWebhook) {
+      latestUsers = useDataStore.getState().users;
+      matchedUser = findMatchedUser(latestUsers);
+
+      if (!matchedUser && (activeWebhook || hasConfiguredWebhook)) {
         try {
-          await pullUsersFromGas();
+          await pullAllFromGas();
+          await pullAllFromServer();
+          latestUsers = useDataStore.getState().users;
+          matchedUser = findMatchedUser(latestUsers);
         } catch (e) {}
       }
     }
 
-    // 5. Match against dataStore users (supporting leading zeroes & default password rules)
-    const latestUsers = useDataStore.getState().users;
-    const matchedUser = latestUsers.find(u => {
-      if (activeTab === 'teacher') {
-        const isStaff = u.role === 'TEACHER' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN';
-        const rowUser = (u.username || '').toLowerCase().trim();
-        const rowNik = (u.nik || '').trim();
-        const idMatched = (rowUser === cleanIdLower) || (rowNik === cleanInputId) || (u.id === cleanInputId);
-        
-        const passMatched = u.password 
-          ? (u.password === cleanInputPass) 
-          : (rowNik === cleanInputPass || cleanInputPass === '123456');
-        return isStaff && idMatched && passMatched;
-      } else {
-        const isStudent = u.role === 'STUDENT';
-        const rowNisn = (u.nisn || '').trim();
-        const rowNisnNoZero = rowNisn.replace(/^0+/, '');
-        const rowUser = (u.username || '').toLowerCase().trim();
-        
-        const idMatched = (rowNisn && (rowNisn === cleanInputId || rowNisnNoZero === cleanIdNoZero)) ||
-                          (rowUser && rowUser === cleanIdLower) ||
-                          (u.id === cleanInputId);
-        
-        const passMatched = u.password 
-          ? (u.password === cleanInputPass) 
-          : (rowNisn === cleanInputPass || rowNisnNoZero === cleanInputPass || cleanInputPass === '123456');
-        return isStudent && idMatched && passMatched;
-      }
-    });
-
     if (matchedUser) {
       login(matchedUser);
-      // Trigger background sync for materials & quizzes
       pullAllFromGas().catch(() => {});
       toast.success(`Selamat datang kembali, ${matchedUser.name}`);
       navigate(matchedUser.role === 'SUPER_ADMIN' || matchedUser.role === 'ADMIN' ? '/admin' : (matchedUser.role === 'TEACHER' ? '/teacher' : '/student'));
     } else {
-      if (!activeWebhook) {
-        toast.error('Akun belum terdaftar di browser ini. Sambungkan Google Sheet terlebih dahulu.');
+      if (!hasConfiguredWebhook && !activeWebhook) {
+        toast.error('Database Google Sheet belum terhubung. Hubungkan database terlebih dahulu melalui tombol di atas.');
       } else {
-        toast.error('Kredensial tidak valid. Pastikan NISN/NIK dan kata sandi sudah sesuai.');
+        toast.error(`Kredensial tidak valid. Pastikan ${activeTab === 'teacher' ? 'NIK / Username' : 'NISN'} dan kata sandi Anda sudah sesuai.`);
       }
     }
     
@@ -168,14 +188,76 @@ export default function Login() {
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
+        {/* Database Connection Status Ribbon */}
+        <div className="mb-4">
+          {hasConfiguredWebhook ? (
+            <div className="p-3 bg-emerald-50/90 border border-emerald-200/90 rounded-xl flex items-center justify-between text-xs shadow-xs animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2.5 w-2.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </span>
+                <div>
+                  <span className="font-bold text-emerald-950 block">Database: Terhubung ke Google Sheet</span>
+                  <span className="text-[10px] text-emerald-700">Tersinkronisasi untuk seluruh perangkat</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleManualPull}
+                  disabled={isPullingData}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                  title="Sinkronkan data terbaru dari spreadsheet"
+                >
+                  <RefreshCw className={cn("w-3 h-3", isPullingData && "animate-spin")} />
+                  {isPullingData ? 'Sinkron...' : 'Sinkronkan'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowConnectModal(true)}
+                  className="text-slate-400 hover:text-slate-600 text-[11px] font-medium cursor-pointer"
+                  title="Ubah URL Webhook Database"
+                >
+                  Ubah
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 bg-amber-50/95 border border-amber-200 rounded-2xl text-xs space-y-2.5 shadow-sm animate-in fade-in">
+              <div className="flex items-start gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500 text-white shrink-0 mt-0.5">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-amber-950 text-xs sm:text-sm">Database Google Sheet Belum Terhubung</div>
+                  <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                    Aplikasi ini menggunakan Google Sheets sebagai database utama. Hubungkan Webhook agar seluruh siswa dan guru dapat langsung masuk dari perangkat mana saja.
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end pt-1">
+                <Button
+                  size="sm"
+                  onClick={() => setShowConnectModal(true)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8.5 gap-1.5 shadow-xs font-semibold"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  Hubungkan Google Sheet Sekarang
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <Card className="shadow-lg border-slate-200">
           {/* Tabs */}
           <div className="flex border-b border-slate-200">
             <button
               onClick={() => setActiveTab('student')}
               className={cn(
-                "flex-1 py-4 text-sm font-medium text-center transition-colors",
+                "flex-1 py-4 text-sm font-medium text-center transition-colors cursor-pointer",
                 activeTab === 'student' ? "bg-white text-indigo-600 border-b-2 border-indigo-600" : "bg-slate-50 text-slate-500 hover:text-slate-700"
               )}
             >
@@ -184,7 +266,7 @@ export default function Login() {
             <button
               onClick={() => setActiveTab('teacher')}
               className={cn(
-                "flex-1 py-4 text-sm font-medium text-center transition-colors",
+                "flex-1 py-4 text-sm font-medium text-center transition-colors cursor-pointer",
                 activeTab === 'teacher' ? "bg-white text-indigo-600 border-b-2 border-indigo-600" : "bg-slate-50 text-slate-500 hover:text-slate-700"
               )}
             >
@@ -235,16 +317,27 @@ export default function Login() {
                 type="button"
                 onClick={handleManualPull}
                 disabled={isPullingData}
-                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1.5 hover:underline transition-colors"
+                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1.5 hover:underline transition-colors cursor-pointer"
                 title="Tarik data siswa & guru terbaru yang baru saja diimpor dari perangkat lain"
               >
                 <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isPullingData ? 'animate-spin' : ''}`} />
-                <span>{isPullingData ? 'Menyinkronkan data cloud...' : 'Baru diimpor di perangkat lain? Sinkronkan dari Cloud'}</span>
+                <span>{isPullingData ? 'Menyinkronkan data database...' : 'Sinkronkan Data Database Google Sheet'}</span>
               </button>
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* Modal Dialog Sambungkan Database Google Sheet */}
+      {showConnectModal && (
+        <ConnectDatabaseModal
+          isOpen={showConnectModal}
+          onClose={() => setShowConnectModal(false)}
+          onSuccess={() => {
+            fetchServerConfig();
+          }}
+        />
+      )}
     </div>
   );
 }

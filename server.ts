@@ -133,7 +133,145 @@ function writeAppData(data: any) {
   }
 }
 
+// Helper to call Google Apps Script from server (bypassing CORS)
+async function callGasServer(targetUrl: string, action: string, payload: any = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 35000);
+  try {
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, ...payload }),
+      redirect: 'follow',
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      throw new Error(`Google Apps Script HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return data;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+let lastGasSyncTime = '';
+let isGasSyncing = false;
+
+async function syncServerWithGoogleSheets(customUrl?: string) {
+  if (isGasSyncing) return { success: false, message: 'Sinkronisasi sedang berjalan...' };
+  const config = readConfig();
+  const webhookUrl = (customUrl || config.webhookUrl || '').trim();
+  if (!webhookUrl || !webhookUrl.includes('script.google.com/macros/s/')) {
+    return { success: false, message: 'Webhook URL belum dikonfigurasi' };
+  }
+
+  isGasSyncing = true;
+  try {
+    const res = await callGasServer(webhookUrl, 'getAllData', {});
+    if (res && res.success) {
+      const current = readAppData();
+      const userMap = new Map<string, any>();
+      for (const u of current.users) userMap.set(u.id, u);
+      if (Array.isArray(res.users)) {
+        for (const u of res.users) {
+          if (u.id) userMap.set(u.id, u);
+        }
+      }
+      if (!userMap.has('sa-1')) {
+        userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
+      }
+
+      const updated = {
+        users: Array.from(userMap.values()),
+        materials: Array.isArray(res.materials) && res.materials.length > 0 ? res.materials : current.materials,
+        quizzes: Array.isArray(res.quizzes) && res.quizzes.length > 0 ? res.quizzes : current.quizzes,
+        quizResults: Array.isArray(res.quizResults) && res.quizResults.length > 0 ? res.quizResults : current.quizResults,
+        updatedAt: new Date().toISOString()
+      };
+
+      writeAppData(updated);
+      lastGasSyncTime = new Date().toISOString();
+      console.log(`[Google Sheets Database] Sinkronisasi Berhasil: ${updated.users.length} pengguna, ${updated.quizzes.length} kuis.`);
+      return { 
+        success: true, 
+        message: 'Berhasil disinkronkan dengan Google Sheets', 
+        stats: {
+          totalUsers: updated.users.length,
+          totalStudents: updated.users.filter((u: any) => u.role === 'STUDENT').length,
+          totalTeachers: updated.users.filter((u: any) => u.role === 'TEACHER').length,
+          totalQuizzes: updated.quizzes.length,
+          totalMaterials: updated.materials.length
+        }
+      };
+    } else {
+      return { success: false, message: res?.error || 'Gagal mengambil data dari Google Sheets' };
+    }
+  } catch (err: any) {
+    console.warn('[Google Sheets Database Sync Error]:', err.message);
+    return { success: false, message: err.message || 'Koneksi ke Google Sheets gagal' };
+  } finally {
+    isGasSyncing = false;
+  }
+}
+
 // API Routes
+app.get('/api/database/status', (_req, res) => {
+  const config = readConfig();
+  const data = readAppData();
+  const isConfigured = Boolean(config.webhookUrl && config.webhookUrl.includes('script.google.com/macros/s/'));
+  res.json({
+    success: true,
+    isConfigured,
+    webhookUrl: config.webhookUrl || '',
+    lastSyncTime: lastGasSyncTime || data.updatedAt,
+    stats: {
+      totalUsers: (data.users || []).length,
+      totalStudents: (data.users || []).filter((u: any) => u.role === 'STUDENT').length,
+      totalTeachers: (data.users || []).filter((u: any) => u.role === 'TEACHER').length,
+      totalQuizzes: (data.quizzes || []).length,
+      totalMaterials: (data.materials || []).length
+    }
+  });
+});
+
+app.post('/api/database/connect', async (req, res) => {
+  const { webhookUrl } = req.body || {};
+  const cleanUrl = typeof webhookUrl === 'string' ? webhookUrl.trim() : '';
+  if (!cleanUrl || !cleanUrl.includes('script.google.com/macros/s/')) {
+    return res.status(400).json({ success: false, error: 'URL Webhook Google Apps Script tidak valid. Harus diawali dengan https://script.google.com/macros/s/...' });
+  }
+
+  try {
+    // 1. Test ping
+    const pingRes = await callGasServer(cleanUrl, 'ping');
+    if (!pingRes || !pingRes.success) {
+      return res.status(400).json({ success: false, error: pingRes?.error || 'Uji koneksi gagal. Pastikan deployment Apps Script disetel akses: Anyone (Siapa saja).' });
+    }
+
+    // 2. Save config
+    writeConfig({ webhookUrl: cleanUrl, updatedAt: new Date().toISOString() });
+
+    // 3. Pull all initial data
+    const syncRes = await syncServerWithGoogleSheets(cleanUrl);
+
+    res.json({
+      success: true,
+      message: 'Berhasil terhubung ke database Google Sheet sekolah!',
+      stats: syncRes.stats
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Gagal menghubungi Google Apps Script' });
+  }
+});
+
+app.post('/api/database/sync', async (_req, res) => {
+  const result = await syncServerWithGoogleSheets();
+  res.json(result);
+});
+
 app.get('/api/config', (_req, res) => {
   const config = readConfig();
   res.json(config);
@@ -148,6 +286,12 @@ app.post('/api/config', (req, res) => {
     updatedAt: new Date().toISOString()
   };
   writeConfig(updated);
+  
+  // Trigger background sync if valid URL provided
+  if (updated.webhookUrl && updated.webhookUrl.includes('script.google.com/macros/s/')) {
+    syncServerWithGoogleSheets(updated.webhookUrl).catch(() => {});
+  }
+
   res.json({ success: true, config: updated });
 });
 
@@ -280,4 +424,21 @@ if (process.env.NODE_ENV === 'production') {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
+
+  // Auto-sync with Google Sheets on server boot
+  setTimeout(() => {
+    const config = readConfig();
+    if (config.webhookUrl && config.webhookUrl.includes('script.google.com/macros/s/')) {
+      console.log('[Startup] Memulai sinkronisasi otomatis database Google Sheet...');
+      syncServerWithGoogleSheets().catch((err) => console.warn('[Startup Sync Notice]:', err.message));
+    }
+  }, 2000);
+
+  // Periodic background sync every 3 minutes
+  setInterval(() => {
+    const config = readConfig();
+    if (config.webhookUrl && config.webhookUrl.includes('script.google.com/macros/s/')) {
+      syncServerWithGoogleSheets().catch(() => {});
+    }
+  }, 3 * 60 * 1000);
 });
