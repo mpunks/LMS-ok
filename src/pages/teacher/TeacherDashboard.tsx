@@ -14,12 +14,16 @@ import {
   ClipboardList,
   Sparkles,
   CalendarCheck2,
-  Award
+  Award,
+  KeyRound,
+  ShieldAlert
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useDataStore } from '@/store/dataStore';
 import { getGradeFromClass } from '@/data/schoolClasses';
+import { isItemForClass } from '@/lib/utils';
 import ManageTeacherClassesModal from '@/components/teacher/ManageTeacherClassesModal';
+import ChangePasswordModal from '@/components/common/ChangePasswordModal';
 
 export default function TeacherDashboard() {
   const navigate = useNavigate();
@@ -27,6 +31,7 @@ export default function TeacherDashboard() {
   const { materials, quizzes, users } = useDataStore();
   
   const [showClassesModal, setShowClassesModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedGradeFilter, setSelectedGradeFilter] = useState<'ALL' | 7 | 8 | 9>('ALL');
 
   // Assigned classes from teacher user profile
@@ -35,7 +40,7 @@ export default function TeacherDashboard() {
   // Filter materials & quizzes related to teacher and assigned classes
   const myMaterials = materials.filter(m => m.teacherId === user?.id);
   const myQuizzes = quizzes.filter(q => 
-    assignedClasses.includes(q.classId) || myMaterials.some(m => m.id === q.materialId)
+    assignedClasses.some(c => isItemForClass(q.classId, q.targetClasses, c)) || myMaterials.some(m => m.id === q.materialId)
   );
 
   // Total students enrolled in the teacher's assigned classes
@@ -78,7 +83,15 @@ export default function TeacherDashboard() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-center">
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
+          <Button
+            onClick={() => setShowPasswordModal(true)}
+            className="bg-white/15 hover:bg-white/25 text-white font-medium text-xs sm:text-sm shadow-xs gap-1.5 py-2.5 px-3 rounded-xl border border-white/20 transition-all"
+            title="Ganti kata sandi akun guru Anda"
+          >
+            <KeyRound className="w-4 h-4 text-white" />
+            Ubah Password
+          </Button>
           <Button
             onClick={() => setShowClassesModal(true)}
             className="bg-white text-indigo-700 hover:bg-indigo-50 font-bold text-xs sm:text-sm shadow-sm gap-2 py-2.5 px-4 rounded-xl border border-white/20 transition-transform active:scale-95"
@@ -93,6 +106,33 @@ export default function TeacherDashboard() {
           </Button>
         </div>
       </div>
+
+      {/* Security Alert: Prompt teacher to change default password */}
+      {!user?.password && (
+        <div className="p-4 rounded-xl bg-amber-50/90 border border-amber-200/90 text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2 rounded-lg bg-amber-500 text-white shrink-0">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-bold text-xs sm:text-sm text-amber-950">
+                Keamanan Akun: Anda masih menggunakan Kata Sandi Bawaan (NIK / 123456)
+              </div>
+              <p className="text-[11px] sm:text-xs text-amber-800 mt-0.5">
+                Demi menjaga kerahasiaan butir soal ujian, kunci jawaban, dan rekap nilai siswa, segera buat kata sandi rahasia Anda sendiri.
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setShowPasswordModal(true)}
+            className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white text-xs gap-1.5 shadow-xs"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            Ubah Kata Sandi Sekarang
+          </Button>
+        </div>
+      )}
 
       {/* Teaching Assignment Quick Info Ribbon */}
       <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -270,8 +310,8 @@ export default function TeacherDashboard() {
             {filteredAssignedClasses.map((classId) => {
               const grade = getGradeFromClass(classId);
               const classStudents = users.filter(u => u.role === 'STUDENT' && u.classId === classId);
-              const classMaterials = materials.filter(m => m.classId === classId && m.teacherId === user?.id);
-              const classQuizzes = quizzes.filter(q => q.classId === classId);
+              const classMaterials = materials.filter(m => isItemForClass(m.classId, m.targetClasses, classId) && m.teacherId === user?.id);
+              const classQuizzes = quizzes.filter(q => isItemForClass(q.classId, q.targetClasses, classId));
 
               // Grade badge color themes
               const gradeStyles = grade === 7 
@@ -376,6 +416,14 @@ export default function TeacherDashboard() {
         isOpen={showClassesModal}
         onClose={() => setShowClassesModal(false)}
       />
+
+      {/* Modal Ubah Kata Sandi Guru */}
+      {showPasswordModal && (
+        <ChangePasswordModal
+          isOpen={showPasswordModal}
+          onClose={() => setShowPasswordModal(false)}
+        />
+      )}
     </div>
   );
 }

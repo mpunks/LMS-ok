@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from '@/components/ui/Toast';
+import { isItemForClass } from '@/lib/utils';
 import ExamRulesModal from '@/components/student/ExamRulesModal';
 
 export default function StudentQuizzes() {
@@ -15,7 +16,7 @@ export default function StudentQuizzes() {
 
   const [selectedQuizForRules, setSelectedQuizForRules] = useState<any | null>(null);
 
-  const studentQuizzes = quizzes.filter(q => q.classId === user?.classId);
+  const studentQuizzes = quizzes.filter(q => isItemForClass(q.classId, q.targetClasses, user?.classId));
   const now = new Date();
 
   return (

@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { useGasStore } from './store/gasStore';
+import { useDataStore } from './store/dataStore';
 import { ToastContainer } from './components/ui/Toast';
 import { MainLayout } from './components/layout/MainLayout';
 import LandingPage from './pages/LandingPage';
@@ -45,13 +46,29 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
 }
 
 export default function App() {
-  const { webhookUrl, testConnection } = useGasStore();
+  const { webhookUrl, testConnection, fetchServerConfig } = useGasStore();
+  const { pullAllFromGas, pullAllFromServer } = useDataStore();
 
   useEffect(() => {
-    const clean = webhookUrl?.trim();
-    if (clean && clean.includes('script.google.com/macros/s/')) {
-      testConnection().catch(() => {});
+    async function initApp() {
+      // 1. Pull central database from server so any new browser immediately gets imported data
+      try {
+        await pullAllFromServer();
+      } catch (e) {}
+
+      // 2. Fetch server config to get shared webhookUrl across all browsers
+      const activeUrl = await fetchServerConfig();
+      const clean = (activeUrl || webhookUrl)?.trim();
+      
+      if (clean && clean.includes('script.google.com/macros/s/')) {
+        await testConnection().catch(() => {});
+        // 3. If this browser is new or has no imported users, bootstrap data from Google Sheets
+        if (useDataStore.getState().users.length <= 1) {
+          await pullAllFromGas().catch(() => {});
+        }
+      }
     }
+    initApp();
   }, []);
 
   return (

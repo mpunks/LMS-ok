@@ -6,14 +6,15 @@ import { BookOpen, FileText, Youtube, CheckCircle2, Lock, Link as LinkIcon, Code
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
+import { isItemForClass } from '@/lib/utils';
 
 export default function StudentMaterials() {
   const { user } = useAuthStore();
   const { materials, markMaterialAsRead, submitAssignment } = useDataStore();
   
-  // Ambil materi khusus kelas siswa ini dan urutkan
+  // Ambil materi khusus kelas siswa ini (mendukung penugasan multi-kelas) dan urutkan
   const studentMaterials = materials
-    .filter(m => m.classId === user?.classId)
+    .filter(m => isItemForClass(m.classId, m.targetClasses, user?.classId))
     .sort((a, b) => a.order - b.order);
 
   // Local state for read status for UI purposes if backend sync takes time

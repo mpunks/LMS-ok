@@ -31,7 +31,8 @@ export interface Subject {
 
 export interface Material {
   id: string;
-  classId: string;
+  classId: string; // e.g. "7A, 7B" or "7A"
+  targetClasses?: string[]; // Daftar kelas yang ditugaskan (multi-class)
   subjectId: string;
   teacherId: string;
   title: string;
@@ -49,7 +50,8 @@ export interface Material {
 export interface Quiz {
   id: string;
   materialId: string;
-  classId: string;
+  classId: string; // e.g. "7A, 7B" or "7A"
+  targetClasses?: string[]; // Daftar kelas yang ditugaskan (multi-class)
   subjectId: string;
   title: string;
   durationMinutes: number;

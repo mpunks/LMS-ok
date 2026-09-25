@@ -26,25 +26,34 @@ import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
 import { useGasStore } from '@/store/gasStore';
 import { Quiz, QuizResult, User } from '@/types';
-import { ALL_SCHOOL_CLASSES } from '@/data/schoolClasses';
+import { parseItemClasses } from '@/lib/utils';
 import ViolationDetailModal from '@/components/teacher/ViolationDetailModal';
 import QuizQuestionsModal from '@/components/teacher/QuizQuestionsModal';
+import ClassCheckboxSelector from '@/components/teacher/ClassCheckboxSelector';
+import ManageTeacherClassesModal from '@/components/teacher/ManageTeacherClassesModal';
 
 export default function TeacherQuizzes() {
   const { user } = useAuthStore();
   const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users, syncAllToGas } = useDataStore();
   const { isConnected } = useGasStore();
-  const assignedClasses = user?.assignedClasses || [];
+  
+  // Normalize assignedClasses to string array
+  const assignedClasses = Array.isArray(user?.assignedClasses)
+    ? user.assignedClasses
+    : (typeof user?.assignedClasses === 'string' && user.assignedClasses
+        ? (user.assignedClasses as string).split(',').map(s => s.trim()).filter(Boolean)
+        : []);
 
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [showManageClassesModal, setShowManageClassesModal] = useState(false);
   
   const [formData, setFormData] = useState<{
     id: string;
     title: string;
     subjectId: string;
-    classId: string;
+    selectedClasses: string[];
     durationMinutes: number;
     materialId: string;
     isScheduled: boolean;
@@ -53,8 +62,8 @@ export default function TeacherQuizzes() {
   }>({ 
     id: '', 
     title: '', 
-    subjectId: 'Matematika', 
-    classId: assignedClasses[0] || '7A', 
+    subjectId: user?.subject || 'Matematika', 
+    selectedClasses: assignedClasses.length > 0 ? [assignedClasses[0]] : [], 
     durationMinutes: 45, 
     materialId: '',
     isScheduled: false,
@@ -73,12 +82,20 @@ export default function TeacherQuizzes() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (formData.selectedClasses.length === 0) {
+      toast.error('Pilih minimal satu kelas yang Anda ampu');
+      return;
+    }
+
+    const classIdStr = formData.selectedClasses.join(', ');
+
     try {
       if (isEdit) {
         await updateQuiz(formData.id, {
           title: formData.title,
           subjectId: formData.subjectId,
-          classId: formData.classId,
+          classId: classIdStr,
+          targetClasses: formData.selectedClasses,
           durationMinutes: formData.durationMinutes,
           materialId: formData.materialId,
           isScheduled: formData.isScheduled,
@@ -92,7 +109,8 @@ export default function TeacherQuizzes() {
           id: newQuizId,
           title: formData.title,
           subjectId: formData.subjectId,
-          classId: formData.classId,
+          classId: classIdStr,
+          targetClasses: formData.selectedClasses,
           durationMinutes: formData.durationMinutes,
           materialId: formData.materialId,
           isScheduled: formData.isScheduled,
@@ -117,7 +135,7 @@ export default function TeacherQuizzes() {
           ]
         };
         await addQuiz(newQuizData);
-        toast.success('Kuis baru berhasil dibuat! Anda dapat langsung mengelola atau mengimpor butir soal.');
+        toast.success(`Kuis baru berhasil dibuat untuk kelas ${classIdStr}! Anda dapat langsung mengelola atau mengimpor butir soal.`);
         // Prompt to open questions manager
         setActiveQuestionsQuiz(newQuizData);
       }
@@ -128,11 +146,12 @@ export default function TeacherQuizzes() {
   };
 
   const handleEdit = (quiz: Quiz) => {
+    const parsed = parseItemClasses(quiz.classId, quiz.targetClasses);
     setFormData({ 
       id: quiz.id, 
       title: quiz.title, 
-      subjectId: quiz.subjectId || 'Matematika', 
-      classId: quiz.classId || '7A', 
+      subjectId: quiz.subjectId || user?.subject || 'Matematika', 
+      selectedClasses: parsed.length > 0 ? parsed : (assignedClasses.length > 0 ? [assignedClasses[0]] : []), 
       durationMinutes: quiz.durationMinutes, 
       materialId: quiz.materialId || '',
       isScheduled: !!quiz.isScheduled || !!quiz.startTime,
@@ -242,8 +261,8 @@ export default function TeacherQuizzes() {
             setFormData({ 
               id: '', 
               title: '', 
-              subjectId: 'Matematika', 
-              classId: assignedClasses[0] || '7A', 
+              subjectId: user?.subject || 'Matematika', 
+              selectedClasses: assignedClasses.length > 0 ? [assignedClasses[0]] : [], 
               durationMinutes: 45, 
               materialId: '',
               isScheduled: false,
@@ -280,40 +299,28 @@ export default function TeacherQuizzes() {
                 required 
               />
               
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="text-xs font-medium text-slate-700 block mb-1.5">Mata Pelajaran</label>
-                  <input
-                    type="text"
-                    value={formData.subjectId}
-                    onChange={e => setFormData({...formData, subjectId: e.target.value})}
-                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs outline-none focus:border-indigo-500"
-                    placeholder="Contoh: Matematika"
-                    required
-                  />
-                </div>
+              <div className="md:col-span-2">
+                <label className="text-xs font-medium text-slate-700 block mb-1.5">Mata Pelajaran</label>
+                <input
+                  type="text"
+                  value={formData.subjectId}
+                  onChange={e => setFormData({...formData, subjectId: e.target.value})}
+                  className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs outline-none focus:border-indigo-500"
+                  placeholder="Contoh: Matematika"
+                  required
+                />
               </div>
 
-              <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1.5">Kelas Target</label>
-                <select 
-                  className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" 
-                  value={formData.classId} 
-                  onChange={e => setFormData({...formData, classId: e.target.value})}
-                >
-                  {assignedClasses.length > 0 && (
-                    <optgroup label="Kelas yang Anda Ampu">
-                      {assignedClasses.map(c => (
-                        <option key={c} value={c}>Kelas {c} ★ (Diampu)</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label="Seluruh Rombel Sekolah (7A-7L, 8A-8L, 9A-9K)">
-                    {ALL_SCHOOL_CLASSES.map(c => (
-                      <option key={c} value={c}>Kelas {c}</option>
-                    ))}
-                  </optgroup>
-                </select>
+              {/* Class Target Checkbox Selector - ONLY classes taught by this teacher */}
+              <div className="md:col-span-2 p-4 rounded-xl border border-indigo-100 bg-white/90 shadow-xs">
+                <ClassCheckboxSelector
+                  assignedClasses={assignedClasses}
+                  selectedClasses={formData.selectedClasses}
+                  onChange={(newClasses) => setFormData(prev => ({ ...prev, selectedClasses: newClasses }))}
+                  label="Kelas Target Ujian (Pilihan Checkbox)"
+                  description="Centang kelas-kelas yang Anda ampu yang ditugaskan untuk mengerjakan kuis ini"
+                  onOpenManageClasses={() => setShowManageClassesModal(true)}
+                />
               </div>
 
               {/* Opsi Penjadwalan Waktu Mulai Kuis */}
@@ -398,11 +405,15 @@ export default function TeacherQuizzes() {
             <Card key={quiz.id} className="hover:border-indigo-200 transition-colors shadow-sm flex flex-col justify-between">
               <div>
                 <CardHeader className="pb-3 border-b-0">
-                  <div className="flex justify-between items-start">
-                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
-                      Kelas {quiz.classId}
-                    </span>
-                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex flex-wrap items-center gap-1 max-w-[70%]">
+                      {parseItemClasses(quiz.classId, quiz.targetClasses).map(cls => (
+                        <span key={cls} className="text-xs font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
+                          Kelas {cls}
+                        </span>
+                      ))}
+                    </div>
+                    <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded shrink-0">
                       {quiz.subjectId || 'Matematika'}
                     </span>
                   </div>
@@ -566,7 +577,14 @@ export default function TeacherQuizzes() {
                           return (
                             <tr key={res.id} className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-semibold text-slate-900">
-                                {student.name}
+                                <div className="flex items-center gap-1.5">
+                                  <span>{student.name}</span>
+                                  {student.classId && (
+                                    <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
+                                      Kelas {student.classId}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="text-[10px] text-slate-400 block font-normal">NISN: {student.nisn || '-'}</span>
                               </td>
                               <td className="px-4 py-3 font-mono text-[11px]">
@@ -635,6 +653,14 @@ export default function TeacherQuizzes() {
           result={selectedViolationResult.result}
           student={selectedViolationResult.student}
           quiz={selectedViolationResult.quiz}
+        />
+      )}
+
+      {/* Modal Kelola Kelas Ampuan Guru */}
+      {showManageClassesModal && (
+        <ManageTeacherClassesModal
+          isOpen={showManageClassesModal}
+          onClose={() => setShowManageClassesModal(false)}
         />
       )}
     </div>

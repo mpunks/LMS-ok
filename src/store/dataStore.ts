@@ -46,6 +46,9 @@ interface DataState {
   deleteQuizResult: (id: string) => Promise<void>;
   syncQuizToGas: (quizId: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   syncAllToGas: () => Promise<{ success: boolean; message?: string; error?: string }>;
+  pullAllFromGas: () => Promise<boolean>;
+  pullUsersFromGas: () => Promise<boolean>;
+  pullAllFromServer: () => Promise<boolean>;
 
   // Assignments
   submitAssignment: (studentId: string, materialId: string, link: string) => Promise<void>;
@@ -53,6 +56,19 @@ interface DataState {
   // Super Admin Database Maintenance
   clearDatabase: (options: DatabaseCleanOptions) => Promise<DatabaseCleanSummary>;
 }
+
+const syncToServer = async (payload: { users?: User[]; materials?: Material[]; quizzes?: Quiz[]; quizResults?: QuizResult[] }) => {
+  try {
+    await fetch('/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    // Non-blocking background sync
+    console.warn('Server sync background notice:', err);
+  }
+};
 
 const syncToGas = async (action: string, payload: any) => {
   const gasStore = useGasStore.getState();
@@ -150,6 +166,8 @@ export const useDataStore = create<DataState>()(
           }
           return { users: [...state.users, user] };
         });
+        const currentUsers = useDataStore.getState().users;
+        syncToServer({ users: currentUsers });
         await syncToGas('addUser', { user });
       },
       addUsers: async (newUsers) => {
@@ -221,17 +239,24 @@ export const useDataStore = create<DataState>()(
         });
 
         const allUsers = useDataStore.getState().users;
+        syncToServer({ users: allUsers });
         await syncToGas('setAllUsers', { users: allUsers });
       },
       updateUser: async (id, data) => {
         set(state => ({ users: state.users.map(u => u.id === id ? { ...u, ...data } : u) }));
+        syncToServer({ users: useDataStore.getState().users });
         await syncToGas('updateUser', { id, data });
       },
       deleteUser: async (id) => {
         set(state => ({ users: state.users.filter(u => u.id !== id) }));
+        syncToServer({ users: useDataStore.getState().users });
         await syncToGas('deleteUser', { id });
       },
       resetPassword: async (id, defaultPassword) => {
+        set(state => ({
+          users: state.users.map(u => u.id === id ? { ...u, password: defaultPassword } : u)
+        }));
+        syncToServer({ users: useDataStore.getState().users });
         await syncToGas('resetPassword', { id, password: defaultPassword });
       },
 
@@ -402,14 +427,17 @@ export const useDataStore = create<DataState>()(
 
       addMaterial: async (material: Material) => {
         set(state => ({ materials: [...state.materials, material] }));
+        syncToServer({ materials: useDataStore.getState().materials });
         await syncToGas('addMaterial', { material });
       },
       updateMaterial: async (id: string, data: Partial<Material>) => {
         set(state => ({ materials: state.materials.map(m => m.id === id ? { ...m, ...data } : m) }));
+        syncToServer({ materials: useDataStore.getState().materials });
         await syncToGas('updateMaterial', { id, data });
       },
       deleteMaterial: async (id: string) => {
         set(state => ({ materials: state.materials.filter(m => m.id !== id) }));
+        syncToServer({ materials: useDataStore.getState().materials });
         await syncToGas('deleteMaterial', { id });
       },
       markMaterialAsRead: async (studentId: string, materialId: string) => {
@@ -418,6 +446,7 @@ export const useDataStore = create<DataState>()(
 
       addQuiz: async (quiz: Quiz) => {
         set(state => ({ quizzes: [...state.quizzes, quiz] }));
+        syncToServer({ quizzes: useDataStore.getState().quizzes });
         await syncToGas('addQuiz', { quiz });
       },
       updateQuiz: async (id: string, data: Partial<Quiz>) => {
@@ -432,12 +461,14 @@ export const useDataStore = create<DataState>()(
           });
           return { quizzes: updatedQuizzes };
         });
+        syncToServer({ quizzes: useDataStore.getState().quizzes });
         if (fullUpdatedQuiz) {
           await syncToGas('updateQuiz', { id, data, quiz: fullUpdatedQuiz });
         }
       },
       deleteQuiz: async (id: string) => {
         set(state => ({ quizzes: state.quizzes.filter(q => q.id !== id) }));
+        syncToServer({ quizzes: useDataStore.getState().quizzes });
         await syncToGas('deleteQuiz', { id });
       },
       syncQuizToGas: async (quizId: string) => {
@@ -451,6 +482,110 @@ export const useDataStore = create<DataState>()(
         const res = await syncToGas('syncAllData', { users, quizzes, materials });
         return res;
       },
+      pullAllFromGas: async () => {
+        const gasStore = useGasStore.getState();
+        if (!gasStore.isConnected && !gasStore.webhookUrl) {
+          await gasStore.fetchServerConfig();
+        }
+        const res = await syncToGas('getAllData', {});
+        if (res && res.success) {
+          set(state => {
+            const currentUsers = state.users;
+            const fetchedUsers: User[] = Array.isArray(res.users) ? res.users : [];
+            
+            // Merge users, protecting Super Admin
+            const userMap = new Map<string, User>();
+            for (const u of currentUsers) userMap.set(u.id, u);
+            for (const u of fetchedUsers) userMap.set(u.id, u);
+
+            // Ensure Super Admin exists
+            if (!userMap.has('sa-1')) {
+              userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+            }
+
+            return {
+              users: Array.from(userMap.values()),
+              quizzes: Array.isArray(res.quizzes) && res.quizzes.length > 0 ? res.quizzes : state.quizzes,
+              materials: Array.isArray(res.materials) && res.materials.length > 0 ? res.materials : state.materials
+            };
+          });
+          return true;
+        }
+        return false;
+      },
+      pullUsersFromGas: async () => {
+        const gasStore = useGasStore.getState();
+        if (!gasStore.isConnected && !gasStore.webhookUrl) {
+          await gasStore.fetchServerConfig();
+        }
+        const res = await syncToGas('getAllUsers', {});
+        if (res && res.success && Array.isArray(res.users) && res.users.length > 0) {
+          set(state => {
+            const userMap = new Map<string, User>();
+            for (const u of state.users) userMap.set(u.id, u);
+            for (const u of res.users) userMap.set(u.id, u);
+            if (!userMap.has('sa-1')) {
+              userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+            }
+            return { users: Array.from(userMap.values()) };
+          });
+          return true;
+        }
+        return false;
+      },
+      pullAllFromServer: async () => {
+        try {
+          const res = await fetch('/api/data');
+          if (!res.ok) return false;
+          const json = await res.json();
+          if (json && json.success && json.data) {
+            const serverData = json.data;
+            set(state => {
+              // Users merge
+              const userMap = new Map<string, User>();
+              for (const u of state.users) userMap.set(u.id, u);
+              if (Array.isArray(serverData.users)) {
+                for (const u of serverData.users) userMap.set(u.id, u);
+              }
+              if (!userMap.has('sa-1')) {
+                userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+              }
+
+              // Materials merge
+              const matMap = new Map<string, Material>();
+              for (const m of state.materials) matMap.set(m.id, m);
+              if (Array.isArray(serverData.materials) && serverData.materials.length > 0) {
+                for (const m of serverData.materials) matMap.set(m.id, m);
+              }
+
+              // Quizzes merge
+              const quizMap = new Map<string, Quiz>();
+              for (const q of state.quizzes) quizMap.set(q.id, q);
+              if (Array.isArray(serverData.quizzes) && serverData.quizzes.length > 0) {
+                for (const q of serverData.quizzes) quizMap.set(q.id, q);
+              }
+
+              // Results merge
+              const resMap = new Map<string, QuizResult>();
+              for (const r of state.quizResults) resMap.set(r.id, r);
+              if (Array.isArray(serverData.quizResults) && serverData.quizResults.length > 0) {
+                for (const r of serverData.quizResults) resMap.set(r.id, r);
+              }
+
+              return {
+                users: Array.from(userMap.values()),
+                materials: Array.from(matMap.values()),
+                quizzes: Array.from(quizMap.values()),
+                quizResults: Array.from(resMap.values())
+              };
+            });
+            return true;
+          }
+        } catch (err) {
+          console.warn('Failed to pull from server:', err);
+        }
+        return false;
+      },
       submitQuiz: async (result: QuizResult) => {
         set(state => ({ 
           quizResults: [
@@ -458,18 +593,21 @@ export const useDataStore = create<DataState>()(
             result
           ] 
         }));
+        syncToServer({ quizResults: useDataStore.getState().quizResults });
         await syncToGas('submitQuiz', { result });
       },
       updateQuizResult: async (id: string, data: Partial<QuizResult>) => {
         set(state => ({
           quizResults: state.quizResults.map(r => r.id === id ? { ...r, ...data } : r)
         }));
+        syncToServer({ quizResults: useDataStore.getState().quizResults });
         await syncToGas('updateQuizResult', { id, data });
       },
       deleteQuizResult: async (id: string) => {
         set(state => ({
           quizResults: state.quizResults.filter(r => r.id !== id)
         }));
+        syncToServer({ quizResults: useDataStore.getState().quizResults });
         await syncToGas('deleteQuizResult', { id });
       },
       submitAssignment: async (studentId: string, materialId: string, link: string) => {
@@ -552,6 +690,14 @@ export const useDataStore = create<DataState>()(
         if (gasTargets.length > 0) {
           await syncToGas('clearDatabase', { targets: gasTargets });
         }
+
+        const finalState = useDataStore.getState();
+        syncToServer({
+          users: finalState.users,
+          materials: finalState.materials,
+          quizzes: finalState.quizzes,
+          quizResults: finalState.quizResults
+        });
 
         return {
           students: studentsDeleted,

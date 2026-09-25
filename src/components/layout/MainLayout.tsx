@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { motion, AnimatePresence } from 'motion/react';
+import ChangePasswordModal from '@/components/common/ChangePasswordModal';
 
 const adminNav = [
   { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
@@ -31,6 +32,7 @@ const studentNav = [
 
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const { user, logout } = useAuthStore();
   const { appName, appLogo } = useSettingsStore();
   const location = useLocation();
@@ -136,16 +138,25 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
 
-        <div className="p-6 border-b border-slate-200">
+        <div className="p-5 border-b border-slate-200">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm uppercase">
+            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm uppercase shrink-0">
               {user?.name?.substring(0, 2) || 'U'}
             </div>
-            <div className="flex flex-col">
-              <span className="font-semibold text-sm text-slate-800 truncate w-36">{user?.name}</span>
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="font-semibold text-sm text-slate-800 truncate">{user?.name}</span>
               <span className="text-xs text-slate-500 capitalize">{user?.role.toLowerCase().replace('_', ' ')}</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowChangePassword(true)}
+            className="mt-3 text-xs text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100/90 px-3 py-1.5 rounded-lg border border-indigo-200/70 transition-colors flex items-center gap-2 w-full justify-center font-medium"
+            title="Ganti kata sandi akun Anda"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+            Ubah Kata Sandi
+          </button>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-1">
@@ -176,12 +187,20 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-200">
+        <div className="p-4 border-t border-slate-200 space-y-1">
+          <button
+            type="button"
+            onClick={() => setShowChangePassword(true)}
+            className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 w-full transition-colors"
+          >
+            <KeyRound className="w-4 h-4 text-slate-400" />
+            Ubah Kata Sandi
+          </button>
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-rose-600 hover:bg-rose-50 w-full transition-colors"
+            className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-rose-600 hover:bg-rose-50 w-full transition-colors"
           >
-            <LogOut className="w-5 h-5" />
+            <LogOut className="w-4 h-4" />
             Keluar Akun
           </button>
         </div>
@@ -212,6 +231,14 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         )}
         {children}
       </main>
+
+      {/* Modal Ubah Kata Sandi */}
+      {showChangePassword && (
+        <ChangePasswordModal
+          isOpen={showChangePassword}
+          onClose={() => setShowChangePassword(false)}
+        />
+      )}
     </div>
   );
 }

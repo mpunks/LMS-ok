@@ -7,6 +7,7 @@ interface AuthState {
   isAuthenticated: boolean;
   login: (user: User) => void;
   logout: () => void;
+  updateCurrentUser: (data: Partial<User>) => void;
   updateAssignedClasses: (classes: string[]) => void;
   updateTeachingAssignment: (classes: string[], subject?: string) => void;
 }
@@ -18,6 +19,10 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       login: (user) => set({ user, isAuthenticated: true }),
       logout: () => set({ user: null, isAuthenticated: false }),
+      updateCurrentUser: (data: Partial<User>) =>
+        set((state) => ({
+          user: state.user ? { ...state.user, ...data } : null,
+        })),
       updateAssignedClasses: (classes: string[]) =>
         set((state) => ({
           user: state.user ? { ...state.user, assignedClasses: classes } : null,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BookOpen, KeyRound, User, Lock } from 'lucide-react';
+import { BookOpen, KeyRound, User, Lock, RefreshCw, CloudCheck, Info } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -18,70 +18,136 @@ export default function Login() {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isPullingData, setIsPullingData] = useState(false);
   const navigate = useNavigate();
   const { login } = useAuthStore();
-  const { webhookUrl, executeAction } = useGasStore();
-  const { users } = useDataStore();
+  const { webhookUrl, executeAction, fetchServerConfig, isConnected } = useGasStore();
+  const { users, addUser, pullAllFromGas, pullUsersFromGas, pullAllFromServer } = useDataStore();
+
+  useEffect(() => {
+    // Ensure central server database and Webhook URL are loaded in this browser
+    pullAllFromServer().catch(() => {});
+    fetchServerConfig().catch(() => {});
+  }, []);
+
+  const handleManualPull = async () => {
+    setIsPullingData(true);
+    try {
+      await pullAllFromServer().catch(() => {});
+      await pullAllFromGas().catch(() => {});
+      const total = useDataStore.getState().users.length;
+      toast.success(`Berhasil menyinkronkan data! ${total} akun kini siap digunakan untuk masuk.`);
+    } catch (err: any) {
+      toast.error('Gagal sinkronisasi data: ' + err?.message);
+    } finally {
+      setIsPullingData(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
-    const cleanWebhook = webhookUrl?.trim();
+    const cleanInputId = identifier.trim();
+    const cleanIdLower = cleanInputId.toLowerCase();
+    const cleanIdNoZero = cleanIdLower.replace(/^0+/, '');
+    const cleanInputPass = password.trim();
+
+    // 1. Super Admin default credential check (instant access)
+    if (activeTab === 'teacher' && cleanIdLower === 'rafx2' && cleanInputPass === 'Asepst007@') {
+      const saUser = { id: 'sa-1', role: 'SUPER_ADMIN' as const, name: 'Super Administrator', username: 'rafx2' };
+      login(saUser);
+      toast.success('Berhasil masuk sebagai Super Administrator');
+      navigate('/admin');
+      setIsLoading(false);
+      return;
+    }
+
+    // 2. Ensure Webhook URL is loaded from server in case of fresh browser
+    let activeWebhook = webhookUrl?.trim();
+    if (!activeWebhook) {
+      activeWebhook = await fetchServerConfig();
+    }
+
     let loginSuccess = false;
 
-    if (cleanWebhook && cleanWebhook.includes('script.google.com/macros/s/')) {
+    // 3. Try Direct Google Apps Script Online Authentication
+    if (activeWebhook && activeWebhook.includes('script.google.com/macros/s/')) {
       try {
-        const res = await executeAction('login', { identifier, password, role: activeTab });
+        const res = await executeAction('login', { 
+          identifier: cleanInputId, 
+          password: cleanInputPass, 
+          role: activeTab 
+        });
         
         if (res && res.success && res.user) {
           login(res.user);
-          toast.success('Berhasil masuk');
+          // Persist user to local store & pull rest of quizzes/materials in background
+          addUser(res.user).catch(() => {});
+          pullAllFromGas().catch(() => {});
+
+          toast.success(`Selamat datang, ${res.user.name}`);
           navigate(res.user.role === 'SUPER_ADMIN' || res.user.role === 'ADMIN' ? '/admin' : (res.user.role === 'TEACHER' ? '/teacher' : '/student'));
           loginSuccess = true;
+          setIsLoading(false);
+          return;
         }
       } catch (err) {
         console.warn('GAS Auth fallback triggered:', err);
       }
     }
 
+    // 4. If online check didn't match or failed, try pulling latest users from server and GAS
     if (!loginSuccess) {
-      // Local fallback verification
-      // 1. Super Admin default check
-      if (activeTab === 'teacher' && identifier === 'rafx2' && password === 'Asepst007@') {
-        const saUser = { id: 'sa-1', role: 'SUPER_ADMIN' as const, name: 'Super Administrator', username: 'rafx2' };
-        login(saUser);
-        toast.success('Berhasil masuk sebagai Super Administrator');
-        navigate('/admin');
-        setIsLoading(false);
-        return;
+      await pullAllFromServer().catch(() => {});
+      if (activeWebhook) {
+        try {
+          await pullUsersFromGas();
+        } catch (e) {}
       }
+    }
 
-      // 2. Check local users in dataStore
-      const matchedUser = users.find(u => {
-        if (activeTab === 'teacher') {
-          const isStaff = u.role === 'TEACHER' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN';
-          const matchId = u.username === identifier || u.nik === identifier || u.id === identifier;
-          const matchPass = (u.password ? u.password === password : (u.nik === password || password === '123456'));
-          return isStaff && matchId && matchPass;
-        } else {
-          const isStudent = u.role === 'STUDENT';
-          const matchId = u.nisn === identifier || u.username === identifier || u.id === identifier;
-          const matchPass = (u.password ? u.password === password : (u.nisn === password || password === '123456'));
-          return isStudent && matchId && matchPass;
-        }
-      });
-
-      if (matchedUser) {
-        login(matchedUser);
-        toast.success(`Selamat datang kembali, ${matchedUser.name}`);
-        navigate(matchedUser.role === 'SUPER_ADMIN' || matchedUser.role === 'ADMIN' ? '/admin' : (matchedUser.role === 'TEACHER' ? '/teacher' : '/student'));
+    // 5. Match against dataStore users (supporting leading zeroes & default password rules)
+    const latestUsers = useDataStore.getState().users;
+    const matchedUser = latestUsers.find(u => {
+      if (activeTab === 'teacher') {
+        const isStaff = u.role === 'TEACHER' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN';
+        const rowUser = (u.username || '').toLowerCase().trim();
+        const rowNik = (u.nik || '').trim();
+        const idMatched = (rowUser === cleanIdLower) || (rowNik === cleanInputId) || (u.id === cleanInputId);
+        
+        const passMatched = u.password 
+          ? (u.password === cleanInputPass) 
+          : (rowNik === cleanInputPass || cleanInputPass === '123456');
+        return isStaff && idMatched && passMatched;
       } else {
-        if (!cleanWebhook) {
-          toast.error('Kredensial tidak valid atau akun belum terdaftar.');
-        } else {
-          toast.error('Kredensial tidak valid atau koneksi ke server GAS bermasalah.');
-        }
+        const isStudent = u.role === 'STUDENT';
+        const rowNisn = (u.nisn || '').trim();
+        const rowNisnNoZero = rowNisn.replace(/^0+/, '');
+        const rowUser = (u.username || '').toLowerCase().trim();
+        
+        const idMatched = (rowNisn && (rowNisn === cleanInputId || rowNisnNoZero === cleanIdNoZero)) ||
+                          (rowUser && rowUser === cleanIdLower) ||
+                          (u.id === cleanInputId);
+        
+        const passMatched = u.password 
+          ? (u.password === cleanInputPass) 
+          : (rowNisn === cleanInputPass || rowNisnNoZero === cleanInputPass || cleanInputPass === '123456');
+        return isStudent && idMatched && passMatched;
+      }
+    });
+
+    if (matchedUser) {
+      login(matchedUser);
+      // Trigger background sync for materials & quizzes
+      pullAllFromGas().catch(() => {});
+      toast.success(`Selamat datang kembali, ${matchedUser.name}`);
+      navigate(matchedUser.role === 'SUPER_ADMIN' || matchedUser.role === 'ADMIN' ? '/admin' : (matchedUser.role === 'TEACHER' ? '/teacher' : '/student'));
+    } else {
+      if (!activeWebhook) {
+        toast.error('Akun belum terdaftar di browser ini. Sambungkan Google Sheet terlebih dahulu.');
+      } else {
+        toast.error('Kredensial tidak valid. Pastikan NISN/NIK dan kata sandi sudah sesuai.');
       }
     }
     
@@ -98,12 +164,12 @@ export default function Login() {
           Masuk ke Portal
         </h2>
         <p className="mt-2 text-center text-sm text-slate-600">
-          Silakan masuk sesuai dengan peran Anda
+          Silakan masuk sesuai dengan peran Anda di sekolah
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <Card>
+        <Card className="shadow-lg border-slate-200">
           {/* Tabs */}
           <div className="flex border-b border-slate-200">
             <button
@@ -127,10 +193,10 @@ export default function Login() {
           </div>
 
           <CardContent className="pt-6">
-            <form onSubmit={handleLogin} className="space-y-6">
+            <form onSubmit={handleLogin} className="space-y-5">
               <Input
                 label={activeTab === 'student' ? 'NISN (Nomor Induk Siswa Nasional)' : 'ID / Username / NIK'}
-                placeholder={activeTab === 'student' ? 'Masukkan NISN...' : 'Masukkan identitas...'}
+                placeholder={activeTab === 'student' ? 'Masukkan 10 digit NISN...' : 'Masukkan username atau NIK...'}
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 required
@@ -139,25 +205,43 @@ export default function Login() {
               <Input
                 label="Kata Sandi"
                 type="password"
-                placeholder="Masukkan kata sandi..."
+                placeholder={activeTab === 'student' ? 'Default: NISN Anda atau 123456' : 'Default: NIK atau 123456'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 icon={<Lock className="w-4 h-4 text-slate-400" />}
               />
               
-              <div className="flex items-center justify-between text-sm">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
-                  <span className="text-slate-600">Ingat Saya</span>
-                </label>
-                <a href="#" className="text-indigo-600 hover:text-indigo-500 font-medium">Lupa sandi?</a>
+              <div className="p-3 bg-indigo-50/70 rounded-xl border border-indigo-100 text-[11px] text-indigo-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold text-indigo-950">
+                  <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                  <span>Petunjuk Masuk Akun:</span>
+                </div>
+                <p className="text-indigo-800 leading-relaxed">
+                  {activeTab === 'student' 
+                    ? 'Gunakan NISN sebagai identitas dan kata sandi awal Anda (atau 123456 jika sandi belum diubah).' 
+                    : 'Gunakan NIK atau Username. Sandi awal adalah NIK atau 123456.'}
+                </p>
               </div>
 
-              <Button type="submit" className="w-full" size="lg" isLoading={isLoading}>
+              <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold" size="lg" isLoading={isLoading}>
                 Masuk ke Sistem <KeyRound className="w-4 h-4 ml-2" />
               </Button>
             </form>
+
+            {/* Cloud Sync Helper for Cross-Browser */}
+            <div className="mt-5 pt-4 border-t border-slate-100 flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={handleManualPull}
+                disabled={isPullingData}
+                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1.5 hover:underline transition-colors"
+                title="Tarik data siswa & guru terbaru yang baru saja diimpor dari perangkat lain"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isPullingData ? 'animate-spin' : ''}`} />
+                <span>{isPullingData ? 'Menyinkronkan data cloud...' : 'Baru diimpor di perangkat lain? Sinkronkan dari Cloud'}</span>
+              </button>
+            </div>
           </CardContent>
         </Card>
       </div>
