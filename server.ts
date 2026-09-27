@@ -24,11 +24,27 @@ function readConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (parsed && parsed.webhookUrl && typeof parsed.webhookUrl === 'string' && parsed.webhookUrl.trim()) {
+        return parsed;
+      }
     }
   } catch (err) {
     console.error('Error reading config file:', err);
   }
+
+  // Check .env file if CONFIG_FILE is empty
+  try {
+    const envPath = path.join(__dirname, '.env');
+    if (fs.existsSync(envPath)) {
+      const envData = fs.readFileSync(envPath, 'utf-8');
+      const match = envData.match(/VITE_GAS_WEBHOOK_URL=["']?([^"'\r\n]+)["']?/);
+      if (match && match[1]) {
+        return { webhookUrl: match[1].trim() };
+      }
+    }
+  } catch (e) {}
+
   return {
     webhookUrl: process.env.VITE_GAS_WEBHOOK_URL || process.env.GAS_WEBHOOK_URL || ''
   };
@@ -37,6 +53,23 @@ function readConfig() {
 function writeConfig(config: any) {
   try {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    
+    // Also save to .env for persistent restarts
+    if (config.webhookUrl) {
+      try {
+        const envPath = path.join(__dirname, '.env');
+        let envContent = '';
+        if (fs.existsSync(envPath)) {
+          envContent = fs.readFileSync(envPath, 'utf-8');
+        }
+        if (envContent.includes('VITE_GAS_WEBHOOK_URL=')) {
+          envContent = envContent.replace(/VITE_GAS_WEBHOOK_URL=.*/g, `VITE_GAS_WEBHOOK_URL="${config.webhookUrl}"`);
+        } else {
+          envContent += `\nVITE_GAS_WEBHOOK_URL="${config.webhookUrl}"\n`;
+        }
+        fs.writeFileSync(envPath, envContent, 'utf-8');
+      } catch (e) {}
+    }
     return true;
   } catch (err) {
     console.error('Error writing config file:', err);

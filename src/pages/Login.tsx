@@ -9,7 +9,6 @@ import { useAuthStore } from '@/store/authStore';
 import { useGasStore } from '@/store/gasStore';
 import { useDataStore } from '@/store/dataStore';
 import { toast } from '@/components/ui/Toast';
-import ConnectDatabaseModal from '@/components/common/ConnectDatabaseModal';
 
 export default function Login() {
   const [searchParams] = useSearchParams();
@@ -20,22 +19,38 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isPullingData, setIsPullingData] = useState(false);
-  const [showConnectModal, setShowConnectModal] = useState(false);
   const navigate = useNavigate();
   const { login } = useAuthStore();
   const { webhookUrl, executeAction, fetchServerConfig, isConnected, testConnection } = useGasStore();
   const { users, addUser, pullAllFromGas, pullUsersFromGas, pullAllFromServer } = useDataStore();
 
   useEffect(() => {
-    // Ensure central server database and Webhook URL are loaded in this browser
-    async function loadInitial() {
-      await pullAllFromServer().catch(() => {});
-      const serverUrl = await fetchServerConfig().catch(() => '');
-      if (serverUrl && serverUrl.includes('script.google.com/macros/s/')) {
-        testConnection().catch(() => {});
+    // Sinkronkan otomatis saat pertama kali web dibuka
+    async function autoSyncOnFirstLoad() {
+      try {
+        await pullAllFromServer().catch(() => {});
+        const serverUrl = await fetchServerConfig().catch(() => '');
+        const activeUrl = (serverUrl || webhookUrl)?.trim();
+
+        if (activeUrl && activeUrl.includes('script.google.com/macros/s/')) {
+          const ok = await testConnection().catch(() => false);
+          if (ok) {
+            await pullAllFromGas().catch(() => {});
+          }
+        } else {
+          // Bila belum terhubung di browser, minta server melakukan sinkronisasi otomatis
+          const res = await fetch('/api/database/sync', { method: 'POST' }).then(r => r.json()).catch(() => null);
+          if (res && res.success) {
+            await pullAllFromServer().catch(() => {});
+            await fetchServerConfig().catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('Auto-sync notice on initial boot:', err);
       }
     }
-    loadInitial();
+
+    autoSyncOnFirstLoad();
   }, []);
 
   const hasConfiguredWebhook = Boolean(webhookUrl && webhookUrl.includes('script.google.com/macros/s/'));
@@ -189,64 +204,48 @@ export default function Login() {
       </div>
 
       <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
-        {/* Database Connection Status Ribbon */}
+        {/* Database Connection Status Notification */}
         <div className="mb-4">
-          {hasConfiguredWebhook ? (
+          {hasConfiguredWebhook || isConnected ? (
             <div className="p-3 bg-emerald-50/90 border border-emerald-200/90 rounded-xl flex items-center justify-between text-xs shadow-xs animate-in fade-in">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2.5 w-2.5 relative">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-2.5 w-2.5 relative shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                 </span>
                 <div>
-                  <span className="font-bold text-emerald-950 block">Database: Terhubung ke Google Sheet</span>
-                  <span className="text-[10px] text-emerald-700">Tersinkronisasi untuk seluruh perangkat</span>
+                  <span className="font-bold text-emerald-950 block">Terhubung ke Database Google Sheet</span>
+                  <span className="text-[10px] text-emerald-700">Tersinkronisasi otomatis untuk semua perangkat</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleManualPull}
-                  disabled={isPullingData}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
-                  title="Sinkronkan data terbaru dari spreadsheet"
-                >
-                  <RefreshCw className={cn("w-3 h-3", isPullingData && "animate-spin")} />
-                  {isPullingData ? 'Sinkron...' : 'Sinkronkan'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConnectModal(true)}
-                  className="text-slate-400 hover:text-slate-600 text-[11px] font-medium cursor-pointer"
-                  title="Ubah URL Webhook Database"
-                >
-                  Ubah
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleManualPull}
+                disabled={isPullingData}
+                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
+                title="Perbarui data dari spreadsheet"
+              >
+                <RefreshCw className={cn("w-3 h-3", isPullingData && "animate-spin")} />
+                {isPullingData ? 'Sinkron...' : 'Sinkronkan'}
+              </button>
             </div>
           ) : (
-            <div className="p-4 bg-amber-50/95 border border-amber-200 rounded-2xl text-xs space-y-2.5 shadow-sm animate-in fade-in">
-              <div className="flex items-start gap-2.5">
-                <div className="p-2 rounded-xl bg-amber-500 text-white shrink-0 mt-0.5">
-                  <Database className="w-4 h-4" />
-                </div>
+            <div className="p-3 bg-indigo-50/90 border border-indigo-200/90 rounded-xl flex items-center justify-between text-xs shadow-xs animate-in fade-in">
+              <div className="flex items-center gap-2.5">
+                <RefreshCw className={cn("w-3.5 h-3.5 text-indigo-600 shrink-0", isPullingData ? "animate-spin" : "")} />
                 <div>
-                  <div className="font-bold text-amber-950 text-xs sm:text-sm">Database Google Sheet Belum Terhubung</div>
-                  <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                    Aplikasi ini menggunakan Google Sheets sebagai database utama. Hubungkan Webhook agar seluruh siswa dan guru dapat langsung masuk dari perangkat mana saja.
-                  </p>
+                  <span className="font-bold text-indigo-950 block">Menghubungkan ke Database Google Sheet...</span>
+                  <span className="text-[10px] text-indigo-700">Sinkronisasi otomatis saat pertama kali dibuka</span>
                 </div>
               </div>
-              <div className="flex justify-end pt-1">
-                <Button
-                  size="sm"
-                  onClick={() => setShowConnectModal(true)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8.5 gap-1.5 shadow-xs font-semibold"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  Hubungkan Google Sheet Sekarang
-                </Button>
-              </div>
+              <button
+                type="button"
+                onClick={handleManualPull}
+                disabled={isPullingData}
+                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
+              >
+                {isPullingData ? 'Sinkron...' : 'Sinkronkan'}
+              </button>
             </div>
           )}
         </div>
@@ -327,17 +326,6 @@ export default function Login() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Modal Dialog Sambungkan Database Google Sheet */}
-      {showConnectModal && (
-        <ConnectDatabaseModal
-          isOpen={showConnectModal}
-          onClose={() => setShowConnectModal(false)}
-          onSuccess={() => {
-            fetchServerConfig();
-          }}
-        />
-      )}
     </div>
   );
 }

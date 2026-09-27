@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database, KeyRound } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database, KeyRound, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useGasStore } from '@/store/gasStore';
+import { useDataStore } from '@/store/dataStore';
+import { toast } from '@/components/ui/Toast';
 import { motion, AnimatePresence } from 'motion/react';
 import ChangePasswordModal from '@/components/common/ChangePasswordModal';
 
@@ -33,8 +36,11 @@ const studentNav = [
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [isCheckingGas, setIsCheckingGas] = useState(false);
   const { user, logout } = useAuthStore();
   const { appName, appLogo } = useSettingsStore();
+  const { isConnected, testConnection } = useGasStore();
+  const { pullAllFromServer } = useDataStore();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -186,6 +192,45 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
+
+        {/* GAS Database Live Connection Status */}
+        <div className="px-4 py-2 bg-slate-50 border-t border-slate-200">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="flex h-2 w-2 relative shrink-0">
+                {isConnected && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                )}
+                <span className={cn("relative inline-flex rounded-full h-2 w-2", isConnected ? "bg-emerald-500" : "bg-amber-500")}></span>
+              </span>
+              <span className={cn("font-medium truncate text-[11px]", isConnected ? "text-emerald-700 font-semibold" : "text-amber-700")}>
+                {isConnected ? 'Database GAS Aktif' : 'GAS Disinkronkan...'}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={isCheckingGas}
+              onClick={async () => {
+                setIsCheckingGas(true);
+                try {
+                  const ok = await testConnection();
+                  await pullAllFromServer();
+                  if (ok) {
+                    toast.success('Koneksi Google Sheets Aktif & Tersinkron!');
+                  } else {
+                    toast.info('Status koneksi diperbarui dari server.');
+                  }
+                } finally {
+                  setIsCheckingGas(false);
+                }
+              }}
+              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer underline shrink-0 disabled:opacity-50 flex items-center gap-1"
+              title="Cek & Sinkronkan Koneksi Google Sheets"
+            >
+              {isCheckingGas ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : 'Cek'}
+            </button>
+          </div>
+        </div>
 
         <div className="p-4 border-t border-slate-200 space-y-1">
           <button

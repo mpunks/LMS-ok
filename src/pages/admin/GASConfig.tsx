@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -702,14 +702,25 @@ function doGet(e) {
 }`;
 
 export default function GASConfig() {
-  const { webhookUrl, setWebhookUrl, testConnection, isConnected, executeAction, lastSyncTime, lastSyncSuccess, lastSyncMessage } = useGasStore();
-  const { users, quizzes, materials, syncAllToGas, pullAllFromGas } = useDataStore();
+  const { webhookUrl, setWebhookUrl, testConnection, isConnected, executeAction, lastSyncTime, lastSyncSuccess, lastSyncMessage, fetchServerConfig } = useGasStore();
+  const { users, quizzes, materials, syncAllToGas, pullAllFromGas, pullAllFromServer } = useDataStore();
   const [url, setUrl] = useState(webhookUrl);
   const [isTesting, setIsTesting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    async function loadServerConfig() {
+      const serverUrl = await fetchServerConfig();
+      if (serverUrl) {
+        setUrl(serverUrl);
+        await testConnection().catch(() => {});
+      }
+    }
+    loadServerConfig();
+  }, []);
 
   const totalQuestions = quizzes.reduce((acc, q) => acc + (q.questions?.length || 0), 0);
   const totalStudents = users.filter(u => u.role === 'STUDENT').length;
@@ -727,9 +738,21 @@ export default function GASConfig() {
     }
     setIsTesting(true);
     setWebhookUrl(cleanUrl);
+
+    // Call server to test & persist centrally
+    try {
+      await fetch('/api/database/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: cleanUrl })
+      });
+      await pullAllFromServer().catch(() => {});
+    } catch (e) {}
+
     const success = await testConnection();
     if (success) {
-      toast.success('Koneksi Webhook Berhasil!');
+      toast.success('Koneksi Webhook Berhasil dan Tersimpan Permanen!');
+      pullAllFromServer().catch(() => {});
     } else {
       toast.error('Gagal terhubung ke Webhook. Pastikan URL berakhiran /exec dan akses disetel ke "Anyone" (Siapa saja).');
     }

@@ -46,7 +46,7 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
 }
 
 export default function App() {
-  const { webhookUrl, testConnection, fetchServerConfig } = useGasStore();
+  const { webhookUrl, testConnection, fetchServerConfig, checkAndMaintainConnection } = useGasStore();
   const { pullAllFromGas, pullAllFromServer } = useDataStore();
 
   useEffect(() => {
@@ -69,6 +69,13 @@ export default function App() {
       }
     }
     initApp();
+
+    // 4. Persistent Auto-Reconnect Heartbeat: Keep GAS connected at all times
+    const heartbeatInterval = setInterval(() => {
+      checkAndMaintainConnection().catch(() => {});
+    }, 45 * 1000);
+
+    return () => clearInterval(heartbeatInterval);
   }, []);
 
   return (
