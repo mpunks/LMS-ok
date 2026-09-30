@@ -51,6 +51,15 @@ export interface Material {
   assignmentDueDate?: string; // Batas akhir pengumpulan (YYYY-MM-DDTHH:mm)
 }
 
+export interface AssignmentSubmission {
+  studentId: string;
+  materialId: string;
+  link: string;
+  fileName?: string;
+  fileSize?: number;
+  submittedAt: string;
+}
+
 export interface Quiz {
   id: string;
   materialId: string;

@@ -8,7 +8,7 @@ import { useGasStore } from '@/store/gasStore';
 import { useDataStore } from '@/store/dataStore';
 
 const GENERATED_GAS_CODE = `/**
- * SmartLMS SMP - Google Apps Script Backend (v2 - Full Questions & CBT Sync)
+ * SmartLMS SMP - Google Apps Script Backend (v3 - Primary Key & Strict Sync)
  * Salin dan tempel kode ini ke editor Google Apps Script Anda (Code.gs).
  */
 
@@ -30,7 +30,7 @@ function ensureAllTablesExist(ss) {
     'Quizzes': ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt'],
     'QuizQuestions': ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'],
     'QuizResults': ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt'],
-    'Assignments': ['studentId', 'materialId', 'link', 'submittedAt'],
+    'Assignments': ['studentId', 'materialId', 'link', 'fileName', 'fileSize', 'submittedAt'],
     'StudentProgress': ['studentId', 'materialId', 'readAt']
   };
   
@@ -39,11 +39,228 @@ function ensureAllTablesExist(ss) {
   }
 }
 
+function findRowIndex(sheet, idColIndex, idVal) {
+  if (!sheet) return -1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  const data = sheet.getRange(2, idColIndex + 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === String(idVal).trim()) return i + 2;
+  }
+  return -1;
+}
+
+// Primary key matching for Users table
+function findUserRow(sheet, user) {
+  if (!sheet) return -1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  const rows = sheet.getDataRange().getValues();
+  const uId = String(user.id || '').trim();
+  const uNisn = String(user.nisn || '').trim();
+  const uNik = String(user.nik || '').trim();
+  const uUser = String(user.username || '').toLowerCase().trim();
+  const uRole = String(user.role || '').toUpperCase().trim();
+
+  for (let r = 1; r < rows.length; r++) {
+    const rowId = String(rows[r][0] || '').trim();
+    const rowRole = String(rows[r][1] || '').toUpperCase().trim();
+    const rowUser = String(rows[r][5] || '').toLowerCase().trim();
+    const rowNik = String(rows[r][6] || '').trim();
+    const rowNisn = String(rows[r][7] || '').trim();
+
+    // 1. Match by NISN (Primary key for students)
+    if ((uRole === 'STUDENT' || rowRole === 'STUDENT') && uNisn && rowNisn && uNisn === rowNisn) {
+      return r + 1;
+    }
+    // 2. Match by NIK or Username (Primary key for teachers)
+    if ((uRole === 'TEACHER' || rowRole === 'TEACHER')) {
+      if (uUser && rowUser && uUser === rowUser) return r + 1;
+      if (uNik && rowNik && uNik === rowNik) return r + 1;
+    }
+    // 3. Match by Username (for admin)
+    if (uUser && rowUser && uUser === rowUser) {
+      return r + 1;
+    }
+    // 4. Fallback ID match
+    if (uId && rowId && uId === rowId) {
+      return r + 1;
+    }
+  }
+  return -1;
+}
+
+// Composite Primary Key for Assignments (studentId + materialId)
+function findAssignmentRow(sheet, studentId, materialId) {
+  if (!sheet) return -1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  const rows = sheet.getDataRange().getValues();
+  const sid = String(studentId || '').trim();
+  const mid = String(materialId || '').trim();
+  for (let r = 1; r < rows.length; r++) {
+    const rowSid = String(rows[r][0] || '').trim();
+    const rowMid = String(rows[r][1] || '').trim();
+    if (rowSid === sid && rowMid === mid) return r + 1;
+  }
+  return -1;
+}
+
+// Composite Primary Key for QuizResults (quizId + studentId)
+function findQuizResultRow(sheet, quizId, studentId) {
+  if (!sheet) return -1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  const rows = sheet.getDataRange().getValues();
+  const qid = String(quizId || '').trim();
+  const sid = String(studentId || '').trim();
+  for (let r = 1; r < rows.length; r++) {
+    const rowQid = String(rows[r][1] || '').trim();
+    const rowSid = String(rows[r][2] || '').trim();
+    if (rowQid === qid && rowSid === sid) return r + 1;
+  }
+  return -1;
+}
+
+// Function to clean all sample / mock data from spreadsheet and deduplicate
+function cleanInitialSampleData(ss) {
+  // 1. Clean sample users
+  const uSheet = ss.getSheetByName('Users');
+  if (uSheet && uSheet.getLastRow() > 1) {
+    const uRows = uSheet.getDataRange().getValues();
+    const seenStudentNisns = {};
+    const seenTeacherUsernames = {};
+    const seenIds = {};
+
+    for (let r = uRows.length - 1; r >= 1; r--) {
+      const id = String(uRows[r][0] || '').trim();
+      const role = String(uRows[r][1] || '').trim().toUpperCase();
+      const name = String(uRows[r][2] || '').toLowerCase().trim();
+      const user = String(uRows[r][5] || '').toLowerCase().trim();
+      const nik = String(uRows[r][6] || '').trim();
+      const nisn = String(uRows[r][7] || '').trim();
+
+      if (role === 'SUPER_ADMIN' || user === 'rafx2' || id === 'sa-1') continue;
+
+      // Check if sample
+      const isSample = id === 'student-1' || id === 'teacher-1' || 
+        name.indexOf('contoh') > -1 || name.indexOf('percobaan') > -1 || name.indexOf('sample') > -1 ||
+        nisn === '1234567890' || nik === '198501012010011001';
+      
+      if (isSample) {
+        uSheet.deleteRow(r + 1);
+        continue;
+      }
+
+      // Check duplicate primary keys
+      if (role === 'STUDENT' && nisn) {
+        if (seenStudentNisns[nisn]) {
+          uSheet.deleteRow(r + 1); // remove duplicate row
+          continue;
+        }
+        seenStudentNisns[nisn] = true;
+      } else if (role === 'TEACHER' && (user || nik)) {
+        const tKey = user || nik;
+        if (seenTeacherUsernames[tKey]) {
+          uSheet.deleteRow(r + 1);
+          continue;
+        }
+        seenTeacherUsernames[tKey] = true;
+      } else if (id) {
+        if (seenIds[id]) {
+          uSheet.deleteRow(r + 1);
+          continue;
+        }
+        seenIds[id] = true;
+      }
+    }
+  }
+
+  // 2. Clean sample quizzes & questions
+  const qSheet = ss.getSheetByName('Quizzes');
+  const sampleQuizIds = [];
+  if (qSheet && qSheet.getLastRow() > 1) {
+    const qRows = qSheet.getDataRange().getValues();
+    const seenQuizIds = {};
+    for (let r = qRows.length - 1; r >= 1; r--) {
+      const qId = String(qRows[r][0] || '').trim();
+      const qTitle = String(qRows[r][4] || '').toLowerCase().trim();
+      const isSample = qId === 'quiz-cbt-1' || qId === 'quiz-1' || qId === 'q-1' ||
+        qTitle.indexOf('bangun datar') > -1 || qTitle.indexOf('aljabar dasar') > -1 || qTitle.indexOf('contoh') > -1;
+      
+      if (isSample) {
+        sampleQuizIds.push(qId);
+        qSheet.deleteRow(r + 1);
+        continue;
+      }
+
+      if (qId) {
+        if (seenQuizIds[qId]) {
+          qSheet.deleteRow(r + 1);
+          continue;
+        }
+        seenQuizIds[qId] = true;
+      }
+    }
+  }
+
+  const qqSheet = ss.getSheetByName('QuizQuestions');
+  if (qqSheet && qqSheet.getLastRow() > 1) {
+    const qqRows = qqSheet.getDataRange().getValues();
+    for (let r = qqRows.length - 1; r >= 1; r--) {
+      const qzId = String(qqRows[r][1] || '').trim();
+      const qzTitle = String(qqRows[r][2] || '').toLowerCase().trim();
+      if (sampleQuizIds.indexOf(qzId) > -1 || qzId === 'quiz-cbt-1' || qzId === 'quiz-1' || 
+          qzTitle.indexOf('bangun datar') > -1 || qzTitle.indexOf('aljabar') > -1) {
+        qqSheet.deleteRow(r + 1);
+      }
+    }
+  }
+
+  // 3. Clean sample materials
+  const mSheet = ss.getSheetByName('Materials');
+  if (mSheet && mSheet.getLastRow() > 1) {
+    const mRows = mSheet.getDataRange().getValues();
+    const seenMatIds = {};
+    for (let r = mRows.length - 1; r >= 1; r--) {
+      const mId = String(mRows[r][0] || '').trim();
+      const mTitle = String(mRows[r][4] || '').toLowerCase().trim();
+      if (mId === 'm-1' || mId === 'm-demo' || mTitle.indexOf('contoh') > -1) {
+        mSheet.deleteRow(r + 1);
+        continue;
+      }
+      if (mId) {
+        if (seenMatIds[mId]) {
+          mSheet.deleteRow(r + 1);
+          continue;
+        }
+        seenMatIds[mId] = true;
+      }
+    }
+  }
+
+  // 4. Deduplicate assignments by (studentId + materialId)
+  const asgSheet = ss.getSheetByName('Assignments');
+  if (asgSheet && asgSheet.getLastRow() > 1) {
+    const asgRows = asgSheet.getDataRange().getValues();
+    const seenAsg = {};
+    for (let r = asgRows.length - 1; r >= 1; r--) {
+      const key = String(asgRows[r][0]).trim() + '::' + String(asgRows[r][1]).trim();
+      if (seenAsg[key]) {
+        asgSheet.deleteRow(r + 1);
+      } else {
+        seenAsg[key] = true;
+      }
+    }
+  }
+}
+
 function setupAllTables() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureAllTablesExist(ss);
   initSuperAdminScriptProperties();
-  return "Setup Berhasil! Semua Tabel (Materials, Assignments, Quizzes, QuizQuestions, dsb) Telah Dibuat di Google Sheet.";
+  cleanInitialSampleData(ss);
+  return "Setup Berhasil! Semua Tabel (Materials, Assignments, Quizzes, QuizQuestions, dsb) Telah Dibuat di Google Sheet & Sampel Awal Dibersihkan.";
 }
 
 function initSuperAdminScriptProperties() {
@@ -52,27 +269,16 @@ function initSuperAdminScriptProperties() {
   props.setProperty('SUPER_ADMIN_PASSWORD', 'Asepst007@');
 }
 
-function findRowIndex(sheet, idColIndex, idVal) {
-  if (!sheet) return -1;
-  const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return -1;
-  const data = sheet.getRange(2, idColIndex + 1, lastRow - 1, 1).getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (String(data[i][0]) === String(idVal)) return i + 2;
-  }
-  return -1;
-}
-
 function saveQuizQuestions(ss, quiz) {
   if (!quiz || !quiz.id) return;
   const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', [
     'id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'
   ]);
   
-  // Hapus butir soal lama untuk quizId ini
+  // Hapus butir soal lama untuk quizId ini agar tidak duplikat
   const lastRow = qqSheet.getLastRow();
   if (lastRow > 1) {
-    const data = qqSheet.getRange(2, 2, lastRow - 1, 1).getValues(); // Kolom B adalah quizId
+    const data = qqSheet.getRange(2, 2, lastRow - 1, 1).getValues();
     for (let i = data.length - 1; i >= 0; i--) {
       if (String(data[i][0]) === String(quiz.id)) {
         qqSheet.deleteRow(i + 2);
@@ -131,6 +337,7 @@ function saveOrUpdateQuiz(ss, quiz) {
     quiz.createdAt || new Date().toISOString()
   ];
   
+  // Check Primary Key
   const rowIdx = findRowIndex(qSheet, 0, quiz.id);
   if (rowIdx > -1) {
     qSheet.getRange(rowIdx, 1, 1, qRow.length).setValues([qRow]);
@@ -138,7 +345,6 @@ function saveOrUpdateQuiz(ss, quiz) {
     qSheet.appendRow(qRow);
   }
   
-  // Sinkronkan setiap butir soal ke tabel QuizQuestions
   saveQuizQuestions(ss, quiz);
 }
 
@@ -238,23 +444,47 @@ function doPost(e) {
     }
 
     // CRUD Handlers - Users
-    if (action === 'addUser') {
+    if (action === 'cleanInitialSampleData') {
+      cleanInitialSampleData(ss);
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: true, 
+        message: 'Data sampel awal & data duplikat berhasil dibersihkan dari Google Sheet!' 
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    else if (action === 'addUser') {
       const u = data.user;
       const pass = u.password || (u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username)));
       const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
-      getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']).appendRow([
-        u.id, 
-        u.role, 
-        u.name, 
-        u.gender || 'L', 
-        u.subject || '', 
-        u.username || '', 
-        u.nik || '', 
-        u.nisn || '', 
-        u.classId || '', 
-        assigned, 
-        pass
-      ]);
+      const uSheet = getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']);
+      
+      const foundRow = findUserRow(uSheet, u);
+      if (foundRow > -1) {
+        uSheet.getRange(foundRow, 3).setValue(u.name);
+        uSheet.getRange(foundRow, 4).setValue(u.gender || 'L');
+        uSheet.getRange(foundRow, 5).setValue(u.subject || '');
+        uSheet.getRange(foundRow, 6).setValue(u.username || '');
+        uSheet.getRange(foundRow, 7).setValue(u.nik || '');
+        uSheet.getRange(foundRow, 8).setValue(u.nisn || '');
+        uSheet.getRange(foundRow, 9).setValue(u.classId || '');
+        uSheet.getRange(foundRow, 10).setValue(assigned);
+        if (u.password && String(u.password).trim() !== '') {
+          uSheet.getRange(foundRow, 11).setValue(String(u.password).trim());
+        }
+      } else {
+        uSheet.appendRow([
+          u.id, 
+          u.role, 
+          u.name, 
+          u.gender || 'L', 
+          u.subject || '', 
+          u.username || '', 
+          u.nik || '', 
+          u.nisn || '', 
+          u.classId || '', 
+          assigned, 
+          pass
+        ]);
+      }
     } 
     else if (action === 'setAllUsers') {
       const sheet = getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']);
@@ -286,31 +516,11 @@ function doPost(e) {
     else if (action === 'addUsers') {
       const sheet = getOrCreateSheet(ss, 'Users', ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password']);
       const userList = data.users || [];
-      const existingData = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
       
       userList.forEach(function(u) {
         const pass = u.password || (u.role === 'TEACHER' ? u.nik : (u.role === 'STUDENT' ? u.nisn : (u.nik || u.username)));
         const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses.join(',') : (u.assignedClasses || '');
-        
-        let foundRow = -1;
-        for (let r = 1; r < existingData.length; r++) {
-          const rowId = String(existingData[r][0]);
-          const rowRole = String(existingData[r][1]);
-          const rowNisn = String(existingData[r][7]);
-          const rowUser = String(existingData[r][5]);
-          const rowName = String(existingData[r][2]).toLowerCase().trim();
-          const rowClass = String(existingData[r][8]).toUpperCase().trim();
-
-          if (rowId === u.id) { foundRow = r + 1; break; }
-          if (u.role === 'STUDENT' && rowRole === 'STUDENT') {
-            if (u.nisn && String(u.nisn).trim() === rowNisn.trim()) { foundRow = r + 1; break; }
-            if (u.name && u.classId && u.name.toLowerCase().trim() === rowName && u.classId.toUpperCase().trim() === rowClass) {
-              foundRow = r + 1; break;
-            }
-          } else if (u.role === 'TEACHER' && rowRole === 'TEACHER') {
-            if (u.username && String(u.username).toLowerCase().trim() === rowUser.toLowerCase().trim()) { foundRow = r + 1; break; }
-          }
-        }
+        const foundRow = findUserRow(sheet, u);
 
         if (foundRow > -1) {
           sheet.getRange(foundRow, 3).setValue(u.name);
@@ -421,8 +631,32 @@ function doPost(e) {
     }
     else if (action === 'deleteUser') {
       const sheet = ss.getSheetByName('Users');
-      const rowIdx = findRowIndex(sheet, 0, data.id);
-      if (rowIdx > -1) sheet.deleteRow(rowIdx);
+      const targetId = String(data.id || '').trim();
+      const targetNisn = String(data.nisn || '').trim();
+      const targetNik = String(data.nik || '').trim();
+      const targetUser = String(data.username || '').toLowerCase().trim();
+
+      if (sheet && sheet.getLastRow() > 1) {
+        const rows = sheet.getDataRange().getValues();
+        for (let r = rows.length - 1; r >= 1; r--) {
+          const rowId = String(rows[r][0] || '').trim();
+          const rowRole = String(rows[r][1] || '').trim();
+          if (rowRole === 'SUPER_ADMIN') continue;
+          const rowUser = String(rows[r][5] || '').toLowerCase().trim();
+          const rowNik = String(rows[r][6] || '').trim();
+          const rowNisn = String(rows[r][7] || '').trim();
+
+          let match = false;
+          if (targetId && rowId === targetId) match = true;
+          if (targetNisn && rowNisn && targetNisn === rowNisn) match = true;
+          if (targetNik && rowNik && targetNik === rowNik) match = true;
+          if (targetUser && rowUser && targetUser === rowUser) match = true;
+
+          if (match) {
+            sheet.deleteRow(r + 1);
+          }
+        }
+      }
     }
     else if (action === 'resetPassword') {
       const sheet = ss.getSheetByName('Users');
@@ -434,25 +668,31 @@ function doPost(e) {
     else if (action === 'addMaterial') {
       const m = data.material;
       const url = m.pdfUrl || m.youtubeUrl || m.linkUrl || '';
-      getOrCreateSheet(ss, 'Materials', ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate'])
-        .appendRow([
-          m.id, 
-          m.classId, 
-          m.subjectId, 
-          m.teacherId, 
-          m.title, 
-          m.content || '', 
-          m.type, 
-          url, 
-          m.chapter, 
-          m.order, 
-          m.semester, 
-          m.createdAt,
-          m.hasAssignment ? 'TRUE' : 'FALSE',
-          m.assignmentTitle || '',
-          m.assignmentInstructions || '',
-          m.assignmentDueDate || ''
-        ]);
+      const mSheet = getOrCreateSheet(ss, 'Materials', ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate']);
+      const rowIdx = findRowIndex(mSheet, 0, m.id);
+      const rowData = [
+        m.id, 
+        m.classId, 
+        m.subjectId, 
+        m.teacherId, 
+        m.title, 
+        m.content || '', 
+        m.type, 
+        url, 
+        m.chapter, 
+        m.order, 
+        m.semester, 
+        m.createdAt,
+        m.hasAssignment ? 'TRUE' : 'FALSE',
+        m.assignmentTitle || '',
+        m.assignmentInstructions || '',
+        m.assignmentDueDate || ''
+      ];
+      if (rowIdx > -1) {
+        mSheet.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
+      } else {
+        mSheet.appendRow(rowData);
+      }
     }
     else if (action === 'updateMaterial') {
       const sheet = ss.getSheetByName('Materials');
@@ -527,7 +767,8 @@ function doPost(e) {
     else if (action === 'submitQuiz') {
       const r = data.result;
       const resSheet = getOrCreateSheet(ss, 'QuizResults', ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt']);
-      resSheet.appendRow([
+      const rowIdx = findQuizResultRow(resSheet, r.quizId, r.studentId);
+      const rowData = [
         r.id,
         r.quizId,
         r.studentId,
@@ -536,11 +777,33 @@ function doPost(e) {
         r.violationsCount || 0,
         JSON.stringify(r.answers || {}),
         r.submittedAt || new Date().toISOString()
-      ]);
+      ];
+      if (rowIdx > -1) {
+        resSheet.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
+      } else {
+        resSheet.appendRow(rowData);
+      }
     }
     else if (action === 'submitAssignment') {
-      getOrCreateSheet(ss, 'Assignments', ['studentId', 'materialId', 'link', 'submittedAt'])
-        .appendRow([data.studentId, data.materialId, data.link, new Date().toISOString()]);
+      const asgSheet = getOrCreateSheet(ss, 'Assignments', ['studentId', 'materialId', 'link', 'fileName', 'fileSize', 'submittedAt']);
+      const rowIdx = findAssignmentRow(asgSheet, data.studentId, data.materialId);
+      const rowData = [
+        data.studentId, 
+        data.materialId, 
+        data.link, 
+        data.fileName || '', 
+        data.fileSize || '', 
+        new Date().toISOString()
+      ];
+      if (rowIdx > -1) {
+        asgSheet.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
+      } else {
+        asgSheet.appendRow(rowData);
+      }
+    }
+    else if (action === 'markMaterialAsRead') {
+      getOrCreateSheet(ss, 'StudentProgress', ['studentId', 'materialId', 'readAt'])
+        .appendRow([data.studentId, data.materialId, new Date().toISOString()]);
     }
     else if (action === 'markMaterialAsRead') {
       getOrCreateSheet(ss, 'StudentProgress', ['studentId', 'materialId', 'readAt'])

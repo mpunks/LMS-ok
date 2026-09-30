@@ -28,7 +28,7 @@ import { DatabaseCleanTarget, DatabaseCleanSummary } from '@/types';
 
 export default function AdminDatabaseClean() {
   const { user } = useAuthStore();
-  const { users, materials, quizzes, quizResults, clearDatabase } = useDataStore();
+  const { users, materials, quizzes, quizResults, clearDatabase, cleanInitialSamples } = useDataStore();
   const { isConnected } = useGasStore();
 
   // Selection states
@@ -36,7 +36,20 @@ export default function AdminDatabaseClean() {
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [confirmationInput, setConfirmationInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCleaningSamples, setIsCleaningSamples] = useState(false);
   const [lastSummary, setLastSummary] = useState<DatabaseCleanSummary | null>(null);
+
+  const handleCleanSamples = async () => {
+    setIsCleaningSamples(true);
+    try {
+      await cleanInitialSamples();
+      toast.success('Data contoh awal (Siswa Contoh, Guru Contoh, Kuis & Materi Contoh) berhasil dibersihkan dari Google Sheet & database!');
+    } catch (err: any) {
+      toast.error('Gagal membersihkan data contoh: ' + (err?.message || err));
+    } finally {
+      setIsCleaningSamples(false);
+    }
+  };
 
   // Security check: Only SUPER_ADMIN allowed
   if (user?.role !== 'SUPER_ADMIN') {
@@ -287,6 +300,44 @@ export default function AdminDatabaseClean() {
           </Card>
         </div>
       </div>
+
+      {/* Card Pembersihan Data Contoh / Sample Awal */}
+      <Card className="border-amber-200 bg-amber-50/50 shadow-xs">
+        <CardContent className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+              <Sparkles className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Bersihkan Data Contoh / Mock Awal dari Google Sheet & Server
+              </h3>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Menghapus akun contoh awal (Siswa Contoh, Guru Contoh), kuis contoh Bangun Datar & Aljabar, serta materi contoh. Akun resmi Anda dan Super Admin tidak terganggu.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={isCleaningSamples}
+            onClick={handleCleanSamples}
+            className="shrink-0 gap-2 border-amber-300 bg-white hover:bg-amber-100/80 text-amber-900 font-semibold text-xs py-2 px-4 rounded-xl shadow-xs"
+          >
+            {isCleaningSamples ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
+                Membersihkan...
+              </>
+            ) : (
+              <>
+                <Trash2 className="w-4 h-4 text-amber-600" />
+                Hapus Data Contoh Sekarang
+              </>
+            )}
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Preset Quick Actions */}
       <Card className="border-slate-200 shadow-xs">

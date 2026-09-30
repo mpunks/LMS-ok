@@ -64,10 +64,6 @@ export default function App() {
       
       if (clean && clean.includes('script.google.com/macros/s/')) {
         await testConnection().catch(() => {});
-        // 3. If this browser is new or has no imported users, bootstrap data from Google Sheets
-        if (useDataStore.getState().users.length <= 1) {
-          await pullAllFromGas().catch(() => {});
-        }
       }
     }
     initApp();

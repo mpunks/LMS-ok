@@ -18,6 +18,9 @@ interface DataState {
   materials: Material[];
   quizzes: Quiz[];
   quizResults: QuizResult[];
+  assignments?: any[];
+  deletedUserKeys?: string[];
+  customPasswords?: Record<string, string>;
   
   // Users (Admin, Teacher, Student)
   addUser: (user: User) => Promise<void>;
@@ -52,13 +55,47 @@ interface DataState {
   pullAllFromServer: () => Promise<boolean>;
 
   // Assignments
-  submitAssignment: (studentId: string, materialId: string, link: string) => Promise<void>;
+  submitAssignment: (studentId: string, materialId: string, link: string, fileName?: string, fileSize?: number) => Promise<void>;
 
   // Super Admin Database Maintenance
   clearDatabase: (options: DatabaseCleanOptions) => Promise<DatabaseCleanSummary>;
+  cleanInitialSamples: () => Promise<void>;
 }
 
-const syncToServer = async (payload: { users?: User[]; materials?: Material[]; quizzes?: Quiz[]; quizResults?: QuizResult[] }) => {
+export const getUserPrimaryKeys = (u: any): string[] => {
+  if (!u) return [];
+  const keys: string[] = [];
+  if (u.id) keys.push(String(u.id).trim());
+  if (u.nisn && String(u.nisn).trim()) keys.push(String(u.nisn).trim());
+  if (u.nik && String(u.nik).trim()) keys.push(String(u.nik).trim());
+  if (u.username && String(u.username).trim()) keys.push(String(u.username).trim().toLowerCase());
+  return keys;
+};
+
+export const isUserInDeletedList = (u: any, deletedKeys: string[] = []): boolean => {
+  if (!u || !Array.isArray(deletedKeys) || deletedKeys.length === 0) return false;
+  if (u.role === 'SUPER_ADMIN' || u.username === 'rafx2' || u.id === 'sa-1') return false;
+  const userKeys = getUserPrimaryKeys(u);
+  return userKeys.some(k => deletedKeys.includes(k) || deletedKeys.includes(k.toLowerCase()));
+};
+
+export const findExistingUserMatch = (list: User[], candidate: any): User | undefined => {
+  if (!candidate) return undefined;
+  for (const item of list) {
+    if (candidate.id && item.id && candidate.id === item.id) return item;
+    if (candidate.role === 'STUDENT' && item.role === 'STUDENT') {
+      if (candidate.nisn && item.nisn && String(candidate.nisn).trim() === String(item.nisn).trim()) return item;
+    }
+    if (candidate.role === 'TEACHER' && item.role === 'TEACHER') {
+      if (candidate.username && item.username && String(candidate.username).trim().toLowerCase() === String(item.username).trim().toLowerCase()) return item;
+      if (candidate.nik && item.nik && String(candidate.nik).trim() === String(item.nik).trim()) return item;
+    }
+    if (candidate.username && item.username && String(candidate.username).trim().toLowerCase() === String(item.username).trim().toLowerCase()) return item;
+  }
+  return undefined;
+};
+
+const syncToServer = async (payload: { users?: User[]; materials?: Material[]; quizzes?: Quiz[]; quizResults?: QuizResult[]; assignments?: any[] }) => {
   try {
     await fetch('/api/data', {
       method: 'POST',
@@ -97,6 +134,9 @@ export const useDataStore = create<DataState>()(
       materials: [] as Material[],
       quizzes: [] as Quiz[],
       quizResults: [] as QuizResult[],
+      assignments: [] as any[],
+      deletedUserKeys: [] as string[],
+      customPasswords: {} as Record<string, string>,
 
       // Actions
       addUser: async (user) => {
@@ -195,7 +235,16 @@ export const useDataStore = create<DataState>()(
         await syncToGas('setAllUsers', { users: allUsers });
       },
       updateUser: async (id, data) => {
-        set(state => ({ users: state.users.map(u => u.id === id ? { ...u, ...data } : u) }));
+        set(state => {
+          const passMap = { ...(state.customPasswords || {}) };
+          if (data.password && data.password.trim() && data.password !== '123456') {
+            passMap[id] = data.password.trim();
+          }
+          return { 
+            users: state.users.map(u => u.id === id ? { ...u, ...data } : u),
+            customPasswords: passMap
+          };
+        });
         const allUsers = useDataStore.getState().users;
         syncToServer({ users: allUsers });
         const userObj = allUsers.find(u => u.id === id);
@@ -209,25 +258,73 @@ export const useDataStore = create<DataState>()(
         });
       },
       deleteUser: async (id) => {
-        set(state => ({ users: state.users.filter(u => u.id !== id) }));
-        syncToServer({ users: useDataStore.getState().users });
-        await syncToGas('deleteUser', { id });
+        const userToDelete = get().users.find(u => u.id === id);
+        const candidateKeys = getUserPrimaryKeys(userToDelete);
+        if (id && !candidateKeys.includes(id)) candidateKeys.push(id);
+
+        set(state => ({
+          users: state.users.filter(u => {
+            if (u.id === id) return false;
+            if (userToDelete?.nisn && u.nisn && u.nisn.trim() === userToDelete.nisn.trim()) return false;
+            if (userToDelete?.nik && u.nik && u.nik.trim() === userToDelete.nik.trim()) return false;
+            if (userToDelete?.username && u.username && u.username.trim().toLowerCase() === userToDelete.username.trim().toLowerCase()) return false;
+            return true;
+          }),
+          deletedUserKeys: Array.from(new Set([...(state.deletedUserKeys || []), ...candidateKeys]))
+        }));
+
+        // Send to server permanent tombstone deletion endpoint
+        try {
+          await fetch('/api/users/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id,
+              nisn: userToDelete?.nisn,
+              nik: userToDelete?.nik,
+              username: userToDelete?.username
+            })
+          });
+        } catch (e) {}
+
+        const remainingUsers = useDataStore.getState().users;
+        syncToServer({ users: remainingUsers });
+        await syncToGas('deleteUser', { 
+          id, 
+          nisn: userToDelete?.nisn, 
+          nik: userToDelete?.nik, 
+          username: userToDelete?.username 
+        });
       },
       resetPassword: async (id, defaultPassword) => {
-        set(state => ({
-          users: state.users.map(u => u.id === id ? { ...u, password: defaultPassword } : u)
-        }));
+        set(state => {
+          const passMap = { ...(state.customPasswords || {}) };
+          delete passMap[id];
+          return {
+            users: state.users.map(u => u.id === id ? { ...u, password: defaultPassword } : u),
+            customPasswords: passMap
+          };
+        });
         syncToServer({ users: useDataStore.getState().users });
         await syncToGas('resetPassword', { id, password: defaultPassword });
       },
       changePassword: async (id: string, newPassword: string) => {
         const cleanPass = newPassword.trim();
         const user = get().users.find(u => u.id === id);
-        
-        // 1. Update state
-        set(state => ({
-          users: state.users.map(u => u.id === id ? { ...u, password: cleanPass } : u)
-        }));
+        const candidateKeys = getUserPrimaryKeys(user);
+        if (id && !candidateKeys.includes(id)) candidateKeys.push(id);
+
+        // 1. Update state and permanent customPasswords index
+        set(state => {
+          const passMap = { ...(state.customPasswords || {}) };
+          for (const k of candidateKeys) {
+            passMap[k] = cleanPass;
+          }
+          return {
+            users: state.users.map(u => (u.id === id || (user?.nisn && u.nisn === user.nisn)) ? { ...u, password: cleanPass } : u),
+            customPasswords: passMap
+          };
+        });
         
         // 2. Sync to server /api/data and /api/users/change-password
         const updatedUsers = get().users;
@@ -237,7 +334,13 @@ export const useDataStore = create<DataState>()(
           await fetch('/api/users/change-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: id, newPassword: cleanPass })
+            body: JSON.stringify({
+              userId: id,
+              nisn: user?.nisn,
+              nik: user?.nik,
+              username: user?.username,
+              newPassword: cleanPass
+            })
           });
         } catch (e) {}
 
@@ -493,36 +596,67 @@ export const useDataStore = create<DataState>()(
         const res = await syncToGas('getAllData', {});
         if (res && res.success) {
           set(state => {
-            const currentUsers = state.users;
+            const activeDeletedKeys = state.deletedUserKeys || [];
+            const activeCustomPasswords = state.customPasswords || {};
+            const currentUsers = state.users.filter(u => !isUserInDeletedList(u, activeDeletedKeys));
             const fetchedUsers: User[] = Array.isArray(res.users) ? res.users : [];
             
-            // Merge users, protecting Super Admin and custom passwords
+            const getIndexKey = (u: any) => {
+              if (u.role === 'STUDENT' && u.nisn && String(u.nisn).trim()) return `student:nisn:${String(u.nisn).trim()}`;
+              if (u.role === 'TEACHER' && u.username && String(u.username).trim()) return `teacher:user:${String(u.username).trim().toLowerCase()}`;
+              if (u.role === 'TEACHER' && u.nik && String(u.nik).trim()) return `teacher:nik:${String(u.nik).trim()}`;
+              if (u.username) return `user:${String(u.username).trim().toLowerCase()}`;
+              return `id:${u.id}`;
+            };
+
             const userMap = new Map<string, User>();
-            for (const u of currentUsers) userMap.set(u.id, u);
+            for (const u of currentUsers) userMap.set(getIndexKey(u), u);
+
             for (const u of fetchedUsers) {
-              const existing = userMap.get(u.id);
-              const finalPass = (u.password && u.password.trim()) ? u.password.trim() : (existing ? existing.password : '');
-              userMap.set(u.id, {
+              if (isUserInDeletedList(u, activeDeletedKeys)) continue;
+              const nameLower = (u.name || '').toLowerCase();
+              if (u.id === 'student-1' || u.id === 'teacher-1' || nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') || u.nisn === '1234567890') continue;
+
+              const key = getIndexKey(u);
+              const existing = userMap.get(key) || findExistingUserMatch(currentUsers, u);
+
+              const uKeys = getUserPrimaryKeys(u);
+              let customPass = '';
+              for (const k of uKeys) {
+                if (activeCustomPasswords[k]) {
+                  customPass = activeCustomPasswords[k];
+                  break;
+                }
+              }
+              const isExistingCustom = existing?.password && existing.password !== u.nisn && existing.password !== u.nik && existing.password !== '123456';
+              const isGasCustom = u.password && u.password !== u.nisn && u.password !== u.nik && u.password !== '123456';
+
+              const finalPass = customPass || (isExistingCustom ? existing.password : (isGasCustom ? u.password : (existing?.password || u.password || u.nisn || u.nik || '123456')));
+
+              userMap.set(key, {
                 ...(existing || {}),
                 ...u,
+                id: (existing && existing.id) ? existing.id : u.id,
                 password: finalPass
               });
             }
 
             // Ensure Super Admin exists
-            if (!userMap.has('sa-1')) {
-              userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+            if (!Array.from(userMap.values()).some(u => u.role === 'SUPER_ADMIN')) {
+              userMap.set('id:sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
             }
 
             const cleanGasQuizzes = (Array.isArray(res.quizzes) ? res.quizzes : state.quizzes)
               .filter((q: Quiz) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
             const cleanGasMaterials = Array.isArray(res.materials) ? res.materials : state.materials;
+            const gasAssignments = Array.isArray(res.assignments) && res.assignments.length > 0 ? res.assignments : (state.assignments || []);
 
             return {
               users: Array.from(userMap.values()),
               quizzes: cleanGasQuizzes,
               materials: cleanGasMaterials,
-              quizResults: state.quizResults
+              quizResults: state.quizResults,
+              assignments: gasAssignments
             };
           });
           return true;
@@ -537,19 +671,51 @@ export const useDataStore = create<DataState>()(
         const res = await syncToGas('getAllUsers', {});
         if (res && res.success && Array.isArray(res.users) && res.users.length > 0) {
           set(state => {
+            const activeDeletedKeys = state.deletedUserKeys || [];
+            const activeCustomPasswords = state.customPasswords || {};
+            const currentUsers = state.users.filter(u => !isUserInDeletedList(u, activeDeletedKeys));
+            
+            const getIndexKey = (u: any) => {
+              if (u.role === 'STUDENT' && u.nisn && String(u.nisn).trim()) return `student:nisn:${String(u.nisn).trim()}`;
+              if (u.role === 'TEACHER' && u.username && String(u.username).trim()) return `teacher:user:${String(u.username).trim().toLowerCase()}`;
+              if (u.role === 'TEACHER' && u.nik && String(u.nik).trim()) return `teacher:nik:${String(u.nik).trim()}`;
+              if (u.username) return `user:${String(u.username).trim().toLowerCase()}`;
+              return `id:${u.id}`;
+            };
+
             const userMap = new Map<string, User>();
-            for (const u of state.users) userMap.set(u.id, u);
+            for (const u of currentUsers) userMap.set(getIndexKey(u), u);
+
             for (const u of res.users) {
-              const existing = userMap.get(u.id);
-              const finalPass = (u.password && u.password.trim()) ? u.password.trim() : (existing ? existing.password : '');
-              userMap.set(u.id, {
+              if (isUserInDeletedList(u, activeDeletedKeys)) continue;
+              const nameLower = (u.name || '').toLowerCase();
+              if (u.id === 'student-1' || u.id === 'teacher-1' || nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') || u.nisn === '1234567890') continue;
+
+              const key = getIndexKey(u);
+              const existing = userMap.get(key) || findExistingUserMatch(currentUsers, u);
+
+              const uKeys = getUserPrimaryKeys(u);
+              let customPass = '';
+              for (const k of uKeys) {
+                if (activeCustomPasswords[k]) {
+                  customPass = activeCustomPasswords[k];
+                  break;
+                }
+              }
+              const isExistingCustom = existing?.password && existing.password !== u.nisn && existing.password !== u.nik && existing.password !== '123456';
+              const isGasCustom = u.password && u.password !== u.nisn && u.password !== u.nik && u.password !== '123456';
+
+              const finalPass = customPass || (isExistingCustom ? existing.password : (isGasCustom ? u.password : (existing?.password || u.password || u.nisn || u.nik || '123456')));
+
+              userMap.set(key, {
                 ...(existing || {}),
                 ...u,
+                id: (existing && existing.id) ? existing.id : u.id,
                 password: finalPass
               });
             }
-            if (!userMap.has('sa-1')) {
-              userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+            if (!Array.from(userMap.values()).some(u => u.role === 'SUPER_ADMIN')) {
+              userMap.set('id:sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
             }
             return { users: Array.from(userMap.values()) };
           });
@@ -565,43 +731,79 @@ export const useDataStore = create<DataState>()(
           if (json && json.success && json.data) {
             const serverData = json.data;
             set(state => {
-              // Users merge with password protection
-              const userMap = new Map<string, User>();
-              for (const u of state.users) userMap.set(u.id, u);
-              if (Array.isArray(serverData.users)) {
-                for (const u of serverData.users) {
-                  const existing = userMap.get(u.id);
-                  const finalPass = (u.password && u.password.trim()) ? u.password.trim() : (existing ? existing.password : '');
-                  userMap.set(u.id, {
-                    ...(existing || {}),
-                    ...u,
-                    password: finalPass
-                  });
+              const activeDeletedKeys = Array.from(new Set([
+                ...(state.deletedUserKeys || []),
+                ...(Array.isArray(serverData.deletedUserKeys) ? serverData.deletedUserKeys : [])
+              ]));
+
+              const activeCustomPasswords = {
+                ...(state.customPasswords || {}),
+                ...(serverData.customPasswords || {})
+              };
+
+              const cleanLocalUsers = state.users.filter(u => !isUserInDeletedList(u, activeDeletedKeys));
+              const candidateUsers = Array.isArray(serverData.users) ? serverData.users : [];
+
+              const getIndexKey = (u: any) => {
+                if (u.role === 'STUDENT' && u.nisn && String(u.nisn).trim()) return `student:nisn:${String(u.nisn).trim()}`;
+                if (u.role === 'TEACHER' && u.username && String(u.username).trim()) return `teacher:user:${String(u.username).trim().toLowerCase()}`;
+                if (u.role === 'TEACHER' && u.nik && String(u.nik).trim()) return `teacher:nik:${String(u.nik).trim()}`;
+                if (u.username) return `user:${String(u.username).trim().toLowerCase()}`;
+                return `id:${u.id}`;
+              };
+
+              const mergedMap = new Map<string, User>();
+              for (const u of cleanLocalUsers) {
+                mergedMap.set(getIndexKey(u), u);
+              }
+
+              for (const su of candidateUsers) {
+                if (isUserInDeletedList(su, activeDeletedKeys)) continue;
+                const nameLower = (su.name || '').toLowerCase();
+                if (su.id === 'student-1' || su.id === 'teacher-1' || nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') || su.nisn === '1234567890') continue;
+
+                const key = getIndexKey(su);
+                const existing = mergedMap.get(key) || findExistingUserMatch(cleanLocalUsers, su);
+
+                const suKeys = getUserPrimaryKeys(su);
+                let customPass = '';
+                for (const k of suKeys) {
+                  if (activeCustomPasswords[k]) {
+                    customPass = activeCustomPasswords[k];
+                    break;
+                  }
                 }
-              }
-              if (!userMap.has('sa-1')) {
-                userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+                const isExistingCustom = existing?.password && existing.password !== su.nisn && existing.password !== su.nik && existing.password !== '123456';
+                const isServerCustom = su.password && su.password !== su.nisn && su.password !== su.nik && su.password !== '123456';
+
+                const finalPass = customPass || (isExistingCustom ? existing.password : (isServerCustom ? su.password : (existing?.password || su.password || su.nisn || su.nik || '123456')));
+
+                mergedMap.set(key, {
+                  ...(existing || {}),
+                  ...su,
+                  id: (existing && existing.id) ? existing.id : su.id,
+                  password: finalPass
+                });
               }
 
-              // Materials: server is authoritative
-              const serverMaterials = Array.isArray(serverData.materials)
-                ? serverData.materials
-                : state.materials;
+              if (!Array.from(mergedMap.values()).some(u => u.role === 'SUPER_ADMIN')) {
+                mergedMap.set('id:sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
+              }
 
-              // Quizzes: server is authoritative and filtered
               const cleanQuizzes = (Array.isArray(serverData.quizzes) ? serverData.quizzes : state.quizzes)
                 .filter((q: Quiz) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
-
-              // Results: server is authoritative
-              const serverResults = Array.isArray(serverData.quizResults)
-                ? serverData.quizResults
-                : state.quizResults;
+              const cleanMaterials = Array.isArray(serverData.materials) ? serverData.materials : state.materials;
+              const serverResults = Array.isArray(serverData.quizResults) ? serverData.quizResults : state.quizResults;
+              const serverAssignments = Array.isArray(serverData.assignments) ? serverData.assignments : (state.assignments || []);
 
               return {
-                users: Array.from(userMap.values()),
-                materials: serverMaterials,
+                users: Array.from(mergedMap.values()),
+                materials: cleanMaterials,
                 quizzes: cleanQuizzes,
-                quizResults: serverResults
+                quizResults: serverResults,
+                assignments: serverAssignments,
+                deletedUserKeys: activeDeletedKeys,
+                customPasswords: activeCustomPasswords
               };
             });
             return true;
@@ -635,8 +837,58 @@ export const useDataStore = create<DataState>()(
         syncToServer({ quizResults: useDataStore.getState().quizResults });
         await syncToGas('deleteQuizResult', { id });
       },
-      submitAssignment: async (studentId: string, materialId: string, link: string) => {
-        await syncToGas('submitAssignment', { studentId, materialId, link });
+      submitAssignment: async (studentId: string, materialId: string, link: string, fileName?: string, fileSize?: number) => {
+        const newRecord = {
+          studentId,
+          materialId,
+          link,
+          fileName: fileName || '',
+          fileSize: fileSize || 0,
+          submittedAt: new Date().toISOString()
+        };
+
+        set(state => {
+          const currentList = state.assignments || [];
+          const filtered = currentList.filter(a => !(a.studentId === studentId && a.materialId === materialId));
+          return {
+            assignments: [...filtered, newRecord]
+          };
+        });
+
+        const allAssignments = get().assignments || [];
+        syncToServer({ assignments: allAssignments });
+        await syncToGas('submitAssignment', { studentId, materialId, link, fileName, fileSize });
+      },
+      cleanInitialSamples: async () => {
+        set(state => {
+          const cleanUsers = state.users.filter(u => {
+            if (u.role === 'SUPER_ADMIN') return true;
+            const nameLower = (u.name || '').toLowerCase();
+            const isSample = u.id === 'student-1' || u.id === 'teacher-1' || 
+              nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') ||
+              (u.nisn && String(u.nisn).trim() === '1234567890');
+            return !isSample;
+          });
+          const cleanQuizzes = state.quizzes.filter(q => 
+            !q.title?.toLowerCase().includes('bangun datar') && 
+            !q.title?.toLowerCase().includes('aljabar dasar') && 
+            q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1' && q.id !== 'q-1'
+          );
+          const cleanMaterials = state.materials.filter(m => 
+            m.id !== 'm-1' && m.id !== 'm-demo' && !m.title?.toLowerCase().includes('contoh')
+          );
+          return {
+            users: cleanUsers,
+            quizzes: cleanQuizzes,
+            materials: cleanMaterials
+          };
+        });
+
+        try {
+          await fetch('/api/clean-samples', { method: 'POST' });
+        } catch (e) {}
+
+        await syncToGas('cleanInitialSampleData', {});
       },
 
       clearDatabase: async (options: DatabaseCleanOptions) => {

@@ -85,8 +85,94 @@ function getDefaultAppData() {
     materials: [],
     quizzes: [],
     quizResults: [],
+    assignments: [],
+    deletedUserKeys: [] as string[],
+    customPasswords: {} as Record<string, string>,
     updatedAt: new Date().toISOString()
   };
+}
+
+// Primary key detection helpers
+function getUserPrimaryKeys(u: any): string[] {
+  if (!u) return [];
+  const keys: string[] = [];
+  if (u.id) keys.push(String(u.id).trim());
+  if (u.nisn && String(u.nisn).trim()) keys.push(String(u.nisn).trim());
+  if (u.nik && String(u.nik).trim()) keys.push(String(u.nik).trim());
+  if (u.username && String(u.username).trim()) keys.push(String(u.username).trim().toLowerCase());
+  return keys;
+}
+
+function isUserDeleted(u: any, deletedKeys: string[] = []): boolean {
+  if (!u || !Array.isArray(deletedKeys) || deletedKeys.length === 0) return false;
+  // NEVER treat Super Admin as deleted
+  if (u.role === 'SUPER_ADMIN' || u.username === 'rafx2' || u.id === 'sa-1') return false;
+  const userKeys = getUserPrimaryKeys(u);
+  return userKeys.some(k => deletedKeys.includes(k) || deletedKeys.includes(k.toLowerCase()));
+}
+
+function findMatchingUser(list: any[], candidate: any) {
+  if (!candidate) return null;
+  const candidateKeys = getUserPrimaryKeys(candidate);
+  for (const item of list) {
+    if (candidate.id && item.id && candidate.id === item.id) return item;
+    if (candidate.role === 'STUDENT' && item.role === 'STUDENT') {
+      if (candidate.nisn && item.nisn && String(candidate.nisn).trim() === String(item.nisn).trim()) return item;
+    }
+    if (candidate.role === 'TEACHER' && item.role === 'TEACHER') {
+      if (candidate.username && item.username && String(candidate.username).trim().toLowerCase() === String(item.username).trim().toLowerCase()) return item;
+      if (candidate.nik && item.nik && String(candidate.nik).trim() === String(item.nik).trim()) return item;
+    }
+    if (candidate.username && item.username && String(candidate.username).trim().toLowerCase() === String(item.username).trim().toLowerCase()) return item;
+  }
+  return null;
+}
+
+function deduplicateUsersList(users: any[]): any[] {
+  const result: any[] = [];
+  const seenNisns = new Set<string>();
+  const seenTeacherUsernames = new Set<string>();
+  const seenIds = new Set<string>();
+
+  for (const u of users) {
+    if (!u) continue;
+    // Super admin check
+    if (u.role === 'SUPER_ADMIN' || u.username === 'rafx2' || u.id === 'sa-1') {
+      if (!seenIds.has('sa-1')) {
+        seenIds.add('sa-1');
+        result.push(u);
+      }
+      continue;
+    }
+
+    if (u.role === 'STUDENT') {
+      const cleanNisn = u.nisn ? String(u.nisn).trim() : '';
+      if (cleanNisn) {
+        if (seenNisns.has(cleanNisn)) continue;
+        seenNisns.add(cleanNisn);
+      } else {
+        if (u.id && seenIds.has(u.id)) continue;
+      }
+      if (u.id) seenIds.add(u.id);
+      result.push(u);
+    } else if (u.role === 'TEACHER') {
+      const cleanUser = u.username ? String(u.username).trim().toLowerCase() : (u.nik ? String(u.nik).trim() : '');
+      if (cleanUser) {
+        if (seenTeacherUsernames.has(cleanUser)) continue;
+        seenTeacherUsernames.add(cleanUser);
+      } else {
+        if (u.id && seenIds.has(u.id)) continue;
+      }
+      if (u.id) seenIds.add(u.id);
+      result.push(u);
+    } else {
+      if (u.id && seenIds.has(u.id)) continue;
+      if (u.id) seenIds.add(u.id);
+      result.push(u);
+    }
+  }
+
+  return result;
 }
 
 function readAppData() {
@@ -96,8 +182,54 @@ function readAppData() {
       const parsed = JSON.parse(data);
       if (parsed && Array.isArray(parsed.users)) {
         if (Array.isArray(parsed.quizzes)) {
-          parsed.quizzes = parsed.quizzes.filter((q: any) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
+          parsed.quizzes = parsed.quizzes.filter((q: any) => 
+            !q.title?.toLowerCase().includes('bangun datar') && 
+            !q.title?.toLowerCase().includes('aljabar dasar') &&
+            q.id !== 'quiz-cbt-1' && 
+            q.id !== 'quiz-1' &&
+            q.id !== 'q-1'
+          );
         }
+        if (!Array.isArray(parsed.assignments)) {
+          parsed.assignments = [];
+        }
+        if (!Array.isArray(parsed.deletedUserKeys)) {
+          parsed.deletedUserKeys = [];
+        }
+        if (!parsed.customPasswords || typeof parsed.customPasswords !== 'object') {
+          parsed.customPasswords = {};
+        }
+
+        // Filter out sample/example users AND deleted tombstoned users
+        parsed.users = parsed.users.filter((u: any) => {
+          const nameLower = (u.name || '').toLowerCase();
+          const isSample = u.id === 'student-1' || u.id === 'teacher-1' || 
+            nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') ||
+            (u.nisn && String(u.nisn).trim() === '1234567890');
+          if (isSample) return false;
+          if (isUserDeleted(u, parsed.deletedUserKeys)) return false;
+          return true;
+        });
+
+        // Deduplicate
+        parsed.users = deduplicateUsersList(parsed.users);
+
+        // Apply saved custom passwords
+        for (const u of parsed.users) {
+          const keys = getUserPrimaryKeys(u);
+          for (const k of keys) {
+            if (parsed.customPasswords[k]) {
+              u.password = parsed.customPasswords[k];
+              break;
+            }
+          }
+        }
+
+        // Ensure Super Admin
+        if (!parsed.users.some((u: any) => u.role === 'SUPER_ADMIN')) {
+          parsed.users.unshift({ id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
+        }
+
         return parsed;
       }
     }
@@ -159,33 +291,82 @@ async function syncServerWithGoogleSheets(customUrl?: string) {
     const res = await callGasServer(webhookUrl, 'getAllData', {});
     if (res && res.success) {
       const current = readAppData();
-      const userMap = new Map<string, any>();
-      for (const u of current.users) userMap.set(u.id, u);
-      if (Array.isArray(res.users)) {
+      
+      // Authoritative user sync without resurrecting deleted users!
+      let updatedUsers = current.users;
+      if (Array.isArray(res.users) && res.users.length > 0) {
+        const cleanUsers: any[] = [];
+
         for (const u of res.users) {
-          if (u.id) {
-            const existing = userMap.get(u.id);
-            // Preserve changed password if GAS returns blank or empty password
-            const mergedPass = (u.password && typeof u.password === 'string' && u.password.trim())
-              ? u.password.trim()
-              : (existing ? existing.password : '');
-            userMap.set(u.id, {
-              ...(existing || {}),
-              ...u,
-              password: mergedPass
-            });
+          // 1. Ignore if user was previously deleted (tombstone check)
+          if (isUserDeleted(u, current.deletedUserKeys)) {
+            continue;
           }
+
+          // 2. Ignore mock/sample accounts
+          const nameLower = (u.name || '').toLowerCase();
+          const isSample = u.id === 'student-1' || u.id === 'teacher-1' || 
+            nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') ||
+            (u.nisn && String(u.nisn).trim() === '1234567890');
+          if (isSample) continue;
+
+          // 3. Match against existing user in server memory by Primary Key (NISN / NIK / username / ID)
+          const existing = findMatchingUser(current.users, u);
+
+          // 4. Custom password preservation: NEVER revert to default NISN/NIK if custom password was set!
+          const keys = getUserPrimaryKeys(u);
+          let savedCustomPass = '';
+          for (const k of keys) {
+            if (current.customPasswords && current.customPasswords[k]) {
+              savedCustomPass = current.customPasswords[k];
+              break;
+            }
+          }
+
+          const isExistingCustom = existing?.password && 
+            existing.password !== u.nisn && 
+            existing.password !== u.nik && 
+            existing.password !== '123456';
+          
+          const isGasCustom = u.password && 
+            u.password !== u.nisn && 
+            u.password !== u.nik && 
+            u.password !== '123456';
+
+          const finalPass = savedCustomPass || 
+            (isExistingCustom ? existing.password : (isGasCustom ? u.password : (existing?.password || u.password || u.nisn || u.nik || '123456')));
+
+          // If a custom password is found, cache it in customPasswords dictionary
+          if (savedCustomPass || isExistingCustom || isGasCustom) {
+            const passToCache = savedCustomPass || (isExistingCustom ? existing.password : u.password);
+            for (const k of keys) {
+              current.customPasswords[k] = passToCache;
+            }
+          }
+
+          cleanUsers.push({
+            ...(existing || {}),
+            ...u,
+            id: (existing && existing.id) ? existing.id : u.id,
+            password: finalPass
+          });
         }
-      }
-      if (!userMap.has('sa-1')) {
-        userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
+
+        // Deduplicate clean users by primary key
+        updatedUsers = deduplicateUsersList(cleanUsers);
+
+        if (!updatedUsers.some((u: any) => u.role === 'SUPER_ADMIN')) {
+          updatedUsers.unshift({ id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
+        }
       }
 
       const updated = {
-        users: Array.from(userMap.values()),
+        ...current,
+        users: updatedUsers,
         materials: Array.isArray(res.materials) && res.materials.length > 0 ? res.materials : current.materials,
         quizzes: Array.isArray(res.quizzes) && res.quizzes.length > 0 ? res.quizzes : current.quizzes,
         quizResults: Array.isArray(res.quizResults) && res.quizResults.length > 0 ? res.quizResults : current.quizResults,
+        assignments: Array.isArray(res.assignments) && res.assignments.length > 0 ? res.assignments : (current.assignments || []),
         updatedAt: new Date().toISOString()
       };
 
@@ -306,19 +487,59 @@ app.post('/api/data', (req, res) => {
     const cleanQuizzes = (Array.isArray(incoming.quizzes) ? incoming.quizzes : current.quizzes)
       .filter((q: any) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
 
+    let incomingUsers = Array.isArray(incoming.users) ? incoming.users : current.users;
+    
+    // Filter out deleted users and sample users
+    incomingUsers = incomingUsers.filter((u: any) => {
+      const nameLower = (u.name || '').toLowerCase();
+      const isSample = u.id === 'student-1' || u.id === 'teacher-1' || 
+        nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample') ||
+        (u.nisn && String(u.nisn).trim() === '1234567890');
+      if (isSample) return false;
+      if (isUserDeleted(u, current.deletedUserKeys)) return false;
+      return true;
+    });
+
+    // Update customPasswords cache for users with custom password
+    if (!current.customPasswords) current.customPasswords = {};
+    for (const u of incomingUsers) {
+      const isCustom = u.password && u.password !== u.nisn && u.password !== u.nik && u.password !== '123456';
+      if (isCustom) {
+        const keys = getUserPrimaryKeys(u);
+        for (const k of keys) {
+          current.customPasswords[k] = u.password.trim();
+        }
+      } else {
+        // Check if we have an existing custom password for this user
+        const keys = getUserPrimaryKeys(u);
+        for (const k of keys) {
+          if (current.customPasswords[k]) {
+            u.password = current.customPasswords[k];
+            break;
+          }
+        }
+      }
+    }
+
+    // Deduplicate
+    const finalUsers = deduplicateUsersList(incomingUsers);
+
+    // Ensure Super Admin
+    if (!finalUsers.some((u: any) => u.role === 'SUPER_ADMIN')) {
+      finalUsers.unshift({ id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
+    }
+
     const updated = {
       ...current,
-      users: Array.isArray(incoming.users) ? incoming.users : current.users,
+      users: finalUsers,
       materials: Array.isArray(incoming.materials) ? incoming.materials : current.materials,
       quizzes: cleanQuizzes,
       quizResults: Array.isArray(incoming.quizResults) ? incoming.quizResults : current.quizResults,
+      assignments: Array.isArray(incoming.assignments) ? incoming.assignments : (current.assignments || []),
+      deletedUserKeys: current.deletedUserKeys,
+      customPasswords: current.customPasswords,
       updatedAt: new Date().toISOString()
     };
-    
-    // Ensure Super Admin is always retained
-    if (!updated.users.some((u: any) => u.role === 'SUPER_ADMIN')) {
-      updated.users.unshift({ id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
-    }
 
     writeAppData(updated);
 
@@ -330,7 +551,8 @@ app.post('/api/data', (req, res) => {
         users: updated.users,
         quizzes: updated.quizzes,
         materials: updated.materials,
-        quizResults: updated.quizResults
+        quizResults: updated.quizResults,
+        assignments: updated.assignments
       }).catch(err => console.warn('[Auto GAS Sync Error]:', err.message));
     }
 
@@ -338,6 +560,130 @@ app.post('/api/data', (req, res) => {
   } catch (err: any) {
     console.error('Error saving app data:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal menyimpan data di server' });
+  }
+});
+
+// Dedicated endpoint to permanently delete a user and prevent resurrection
+app.post('/api/users/delete', async (req, res) => {
+  try {
+    const { id, nisn, nik, username } = req.body || {};
+    if (!id && !nisn && !nik && !username) {
+      return res.status(400).json({ success: false, error: 'Identitas pengguna wajib dikirimkan' });
+    }
+
+    const current = readAppData();
+    if (!Array.isArray(current.deletedUserKeys)) {
+      current.deletedUserKeys = [];
+    }
+
+    // Add all identifiers to tombstone list
+    const candidateKeys = [id, nisn, nik, username].filter(Boolean).map(s => String(s).trim());
+    for (const k of candidateKeys) {
+      if (!current.deletedUserKeys.includes(k)) {
+        current.deletedUserKeys.push(k);
+      }
+    }
+
+    // Permanently filter out from server memory
+    current.users = current.users.filter((u: any) => {
+      if (u.role === 'SUPER_ADMIN' || u.username === 'rafx2' || u.id === 'sa-1') return true;
+      if (id && u.id === id) return false;
+      if (nisn && u.nisn && String(u.nisn).trim() === String(nisn).trim()) return false;
+      if (nik && u.nik && String(u.nik).trim() === String(nik).trim()) return false;
+      if (username && u.username && String(u.username).trim().toLowerCase() === String(username).trim().toLowerCase()) return false;
+      return true;
+    });
+
+    current.updatedAt = new Date().toISOString();
+    writeAppData(current);
+
+    // Call GAS Webhook to permanently delete row(s) in Google Sheets
+    const config = readConfig();
+    const webhookUrl = (config.webhookUrl || '').trim();
+    if (webhookUrl && webhookUrl.includes('script.google.com/macros/s/')) {
+      callGasServer(webhookUrl, 'deleteUser', { id, nisn, nik, username }).catch(err => {
+        console.warn('[GAS Delete User Notice]:', err.message);
+      });
+    }
+
+    res.json({ success: true, message: 'Pengguna berhasil dihapus permanen dari server dan Google Sheet' });
+  } catch (err: any) {
+    console.error('Error in /api/users/delete:', err);
+    res.status(500).json({ success: false, error: err.message || 'Gagal menghapus pengguna' });
+  }
+});
+
+// File upload endpoint for student assignments and media
+const uploadsDir = path.join(dataDir, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
+app.post('/api/upload', (req, res) => {
+  try {
+    const { fileName, fileData } = req.body || {};
+    if (!fileName || !fileData) {
+      return res.status(400).json({ success: false, error: 'Nama dan data berkas diperlukan' });
+    }
+    const base64Data = fileData.replace(/^data:[^;]+;base64,/, '');
+    const ext = path.extname(fileName) || '';
+    const safeBaseName = path.basename(fileName, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const cleanFileName = `tugas_${Date.now()}_${safeBaseName}${ext}`;
+    const filePath = path.join(uploadsDir, cleanFileName);
+    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+    const fileUrl = `/uploads/${cleanFileName}`;
+    res.json({ success: true, fileUrl, fileName: cleanFileName });
+  } catch (err: any) {
+    console.error('Upload error:', err);
+    res.status(500).json({ success: false, error: 'Gagal mengunggah berkas' });
+  }
+});
+
+// Endpoint to purge initial sample/mock data from server and Google Sheets
+app.post('/api/clean-samples', async (_req, res) => {
+  try {
+    const appData = readAppData();
+    // 1. Clean sample quizzes
+    appData.quizzes = (appData.quizzes || []).filter((q: any) => 
+      !q.title?.toLowerCase().includes('aljabar dasar') &&
+      !q.title?.toLowerCase().includes('bangun datar') &&
+      q.id !== 'q-1' && q.id !== 'quiz-1' && q.id !== 'quiz-cbt-1'
+    );
+    // 2. Clean sample materials
+    appData.materials = (appData.materials || []).filter((m: any) =>
+      m.id !== 'm-1' && m.id !== 'm-demo' && !m.title?.toLowerCase().includes('contoh')
+    );
+    // 3. Clean sample users
+    appData.users = (appData.users || []).filter((u: any) => {
+      const nameLower = (u.name || '').toLowerCase();
+      const isSample = u.id === 'student-1' || u.id === 'teacher-1' || nameLower.includes('contoh') || nameLower.includes('percobaan') || nameLower.includes('sample');
+      return !isSample;
+    });
+    // Ensure Super Admin remains
+    if (!appData.users.some((u: any) => u.role === 'SUPER_ADMIN')) {
+      appData.users.unshift({ id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' });
+    }
+    appData.updatedAt = new Date().toISOString();
+    writeAppData(appData);
+
+    // Call GAS to clean sample data in Google Sheets as well
+    const config = readConfig();
+    const webhookUrl = (config.webhookUrl || '').trim();
+    if (webhookUrl && webhookUrl.includes('script.google.com/macros/s/')) {
+      await callGasServer(webhookUrl, 'cleanInitialSampleData', {}).catch(() => {});
+      await callGasServer(webhookUrl, 'syncAllData', {
+        users: appData.users,
+        quizzes: appData.quizzes,
+        materials: appData.materials,
+        quizResults: appData.quizResults,
+        assignments: appData.assignments
+      }).catch(() => {});
+    }
+
+    res.json({ success: true, message: 'Data contoh awal berhasil dibersihkan dari server dan Google Sheet' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -356,12 +702,16 @@ app.post('/api/users/change-password', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Pengguna tidak ditemukan di database server' });
     }
 
-    // 1. Update in local server cache
+    // 1. Update in local server cache and permanent customPasswords index
     appData.users[userIndex].password = cleanPass;
+    if (!appData.customPasswords) appData.customPasswords = {};
+    const targetUser = appData.users[userIndex];
+    const keys = getUserPrimaryKeys(targetUser);
+    for (const k of keys) {
+      appData.customPasswords[k] = cleanPass;
+    }
     appData.updatedAt = new Date().toISOString();
     writeAppData(appData);
-
-    const targetUser = appData.users[userIndex];
 
     // 2. Synchronize directly with Google Apps Script Webhook
     const config = readConfig();
@@ -493,7 +843,8 @@ app.listen(PORT, '0.0.0.0', () => {
   setTimeout(() => {
     const config = readConfig();
     if (config.webhookUrl && config.webhookUrl.includes('script.google.com/macros/s/')) {
-      console.log('[Startup] Memulai sinkronisasi otomatis database Google Sheet...');
+      console.log('[Startup] Memulai sinkronisasi otomatis database Google Sheet & pembersihan sampel...');
+      callGasServer(config.webhookUrl, 'cleanInitialSampleData', {}).catch(() => {});
       syncServerWithGoogleSheets().catch((err) => console.warn('[Startup Sync Notice]:', err.message));
     }
   }, 2000);
