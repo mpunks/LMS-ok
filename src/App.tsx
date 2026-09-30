@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { useGasStore } from './store/gasStore';
 import { useDataStore } from './store/dataStore';
+import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { ToastContainer } from './components/ui/Toast';
 import { MainLayout } from './components/layout/MainLayout';
 import LandingPage from './pages/LandingPage';
@@ -15,6 +16,7 @@ import AdminUsers from './pages/admin/AdminUsers';
 import AdminStudents from './pages/admin/AdminStudents';
 import AdminSettings from './pages/admin/AdminSettings';
 import AdminDatabaseClean from './pages/admin/AdminDatabaseClean';
+import AndroidAppGuide from './pages/admin/AndroidAppGuide';
 
 // Teacher Pages
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
@@ -70,12 +72,29 @@ export default function App() {
     }
     initApp();
 
-    // 4. Persistent Auto-Reconnect Heartbeat: Keep GAS connected at all times
+    // 4. Multi-device Auto-Sync Loop: Pull latest quizzes & materials every 10 seconds
+    const syncInterval = setInterval(() => {
+      pullAllFromServer().catch(() => {});
+    }, 10 * 1000);
+
+    // 5. Persistent Auto-Reconnect Heartbeat: Keep GAS connected at all times
     const heartbeatInterval = setInterval(() => {
       checkAndMaintainConnection().catch(() => {});
     }, 45 * 1000);
 
-    return () => clearInterval(heartbeatInterval);
+    // 6. Window focus / visibility change sync: update instantly when switching back to tab
+    const handleFocus = () => {
+      pullAllFromServer().catch(() => {});
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      clearInterval(syncInterval);
+      clearInterval(heartbeatInterval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
   }, []);
 
   return (
@@ -113,6 +132,11 @@ export default function App() {
         <Route path="/admin/database" element={
           <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
             <AdminDatabaseClean />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/android" element={
+          <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN']}>
+            <AndroidAppGuide />
           </ProtectedRoute>
         } />
 
@@ -170,6 +194,7 @@ export default function App() {
           </ProtectedRoute>
         } />
       </Routes>
+      <OfflineIndicator />
       <ToastContainer />
     </BrowserRouter>
   );

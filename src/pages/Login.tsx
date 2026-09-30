@@ -9,6 +9,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useGasStore } from '@/store/gasStore';
 import { useDataStore } from '@/store/dataStore';
 import { toast } from '@/components/ui/Toast';
+import { PWAInstallButton } from '@/components/common/PWAInstallButton';
 
 export default function Login() {
   const [searchParams] = useSearchParams();
@@ -131,8 +132,9 @@ export default function Login() {
           const rowNik = (u.nik || '').trim();
           const idMatched = (rowUser === cleanIdLower) || (rowNik === cleanInputId) || (u.id === cleanInputId);
           
-          const passMatched = u.password 
-            ? (u.password === cleanInputPass) 
+          const hasCustomPass = Boolean(u.password && typeof u.password === 'string' && u.password.trim() !== '');
+          const passMatched = hasCustomPass 
+            ? (u.password.trim() === cleanInputPass) 
             : (rowNik === cleanInputPass || cleanInputPass === '123456');
           return isStaff && idMatched && passMatched;
         } else {
@@ -145,8 +147,9 @@ export default function Login() {
                             (rowUser && rowUser === cleanIdLower) ||
                             (u.id === cleanInputId);
           
-          const passMatched = u.password 
-            ? (u.password === cleanInputPass) 
+          const hasCustomPass = Boolean(u.password && typeof u.password === 'string' && u.password.trim() !== '');
+          const passMatched = hasCustomPass 
+            ? (u.password.trim() === cleanInputPass) 
             : (rowNisn === cleanInputPass || rowNisnNoZero === cleanInputPass || cleanInputPass === '123456');
           return isStudent && idMatched && passMatched;
         }
@@ -249,6 +252,9 @@ export default function Login() {
             </div>
           )}
         </div>
+
+        {/* Pasang Aplikasi Android Banner */}
+        <PWAInstallButton variant="banner" className="mb-4" />
 
         <Card className="shadow-lg border-slate-200">
           {/* Tabs */}

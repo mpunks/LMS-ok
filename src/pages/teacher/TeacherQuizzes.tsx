@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -34,8 +34,12 @@ import ManageTeacherClassesModal from '@/components/teacher/ManageTeacherClasses
 
 export default function TeacherQuizzes() {
   const { user } = useAuthStore();
-  const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users, syncAllToGas } = useDataStore();
+  const { quizzes, addQuiz, updateQuiz, deleteQuiz, quizResults, users, syncAllToGas, pullAllFromServer } = useDataStore();
   const { isConnected } = useGasStore();
+
+  useEffect(() => {
+    pullAllFromServer().catch(() => {});
+  }, []);
   
   // Normalize assignedClasses to string array
   const assignedClasses = Array.isArray(user?.assignedClasses)

@@ -83,57 +83,7 @@ function getDefaultAppData() {
       { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' }
     ],
     materials: [],
-    quizzes: [
-      {
-        id: 'quiz-cbt-1',
-        title: 'Penilaian Harian CBT Matematika: Bangun Datar & Aljabar',
-        subjectId: 'Matematika',
-        classId: '7A',
-        targetClasses: ['7A'],
-        durationMinutes: 45,
-        isScheduled: true,
-        startTime: new Date(Date.now() - 3600000).toISOString().slice(0, 16),
-        endTime: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 16),
-        createdAt: new Date().toISOString(),
-        questions: [
-          {
-            id: 'q-med-1',
-            text: 'Perhatikan gambar bangun datar berikut. Jika panjang sisi sejajar masing-masing 10 cm dan 22 cm, serta tingginya 8 cm, berapakah luas bangun trapesium tersebut?',
-            options: ['128 cm²', '144 cm²', '160 cm²', '176 cm²'],
-            correctOptionIndex: 0,
-            points: 25,
-            imageUrl: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?auto=format&fit=crop&w=800&q=80',
-            explanation: 'Rumus Luas Trapesium = ½ × (a + b) × t = ½ × (10 + 22) × 8 = ½ × 32 × 8 = 128 cm².'
-          },
-          {
-            id: 'q-med-2',
-            text: 'Simak video penjelasan konsep geometri berikut. Berdasarkan prinsip segitiga siku-siku, jika alas 6 cm dan tinggi 8 cm, berapakah panjang sisi miringnya?',
-            options: ['9 cm', '10 cm', '12 cm', '14 cm'],
-            correctOptionIndex: 1,
-            points: 25,
-            videoUrl: 'https://www.youtube.com/watch?v=AA6RfgP-AHU',
-            explanation: 'c = √(6² + 8²) = √(36 + 64) = √100 = 10 cm.'
-          },
-          {
-            id: 'q-med-3',
-            text: 'Dengarkan rekaman instrumen audio listening berikut. Berapakah hasil perhitungan aljabar dari 12 dikali 3?',
-            options: ['24 butir', '36 butir', '48 butir', '60 butir'],
-            correctOptionIndex: 1,
-            points: 25,
-            audioUrl: 'https://actions.google.com/sounds/v1/science/ambient_music.ogg',
-            explanation: 'Hasil perhitungan adalah 12 × 3 = 36.'
-          },
-          {
-            id: 'q-med-4',
-            text: 'Bentuk paling sederhana dari aljabar 5x + 3y - 2x + 7y adalah...',
-            options: ['3x + 10y', '7x + 10y', '3x - 4y', '10x + 3y'],
-            correctOptionIndex: 0,
-            points: 25,
-            explanation: 'Suku sejenis dikelompokkan: (5x - 2x) + (3y + 7y) = 3x + 10y.'
-          }
-        ]
-      }
-    ],
+    quizzes: [],
     quizResults: [],
     updatedAt: new Date().toISOString()
   };
@@ -145,6 +95,9 @@ function readAppData() {
       const data = fs.readFileSync(APP_DATA_FILE, 'utf-8');
       const parsed = JSON.parse(data);
       if (parsed && Array.isArray(parsed.users)) {
+        if (Array.isArray(parsed.quizzes)) {
+          parsed.quizzes = parsed.quizzes.filter((q: any) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
+        }
         return parsed;
       }
     }
@@ -210,7 +163,18 @@ async function syncServerWithGoogleSheets(customUrl?: string) {
       for (const u of current.users) userMap.set(u.id, u);
       if (Array.isArray(res.users)) {
         for (const u of res.users) {
-          if (u.id) userMap.set(u.id, u);
+          if (u.id) {
+            const existing = userMap.get(u.id);
+            // Preserve changed password if GAS returns blank or empty password
+            const mergedPass = (u.password && typeof u.password === 'string' && u.password.trim())
+              ? u.password.trim()
+              : (existing ? existing.password : '');
+            userMap.set(u.id, {
+              ...(existing || {}),
+              ...u,
+              password: mergedPass
+            });
+          }
         }
       }
       if (!userMap.has('sa-1')) {
@@ -339,11 +303,14 @@ app.post('/api/data', (req, res) => {
     const current = readAppData();
     const incoming = req.body || {};
     
+    const cleanQuizzes = (Array.isArray(incoming.quizzes) ? incoming.quizzes : current.quizzes)
+      .filter((q: any) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
+
     const updated = {
       ...current,
       users: Array.isArray(incoming.users) ? incoming.users : current.users,
       materials: Array.isArray(incoming.materials) ? incoming.materials : current.materials,
-      quizzes: Array.isArray(incoming.quizzes) ? incoming.quizzes : current.quizzes,
+      quizzes: cleanQuizzes,
       quizResults: Array.isArray(incoming.quizResults) ? incoming.quizResults : current.quizResults,
       updatedAt: new Date().toISOString()
     };
@@ -354,10 +321,74 @@ app.post('/api/data', (req, res) => {
     }
 
     writeAppData(updated);
-    res.json({ success: true, message: 'Data berhasil disimpan di server', data: updated });
+
+    // Auto-forward to Google Apps Script Webhook asynchronously so Google Sheets is always up-to-date!
+    const config = readConfig();
+    const webhookUrl = (config.webhookUrl || '').trim();
+    if (webhookUrl && webhookUrl.includes('script.google.com/macros/s/')) {
+      callGasServer(webhookUrl, 'syncAllData', {
+        users: updated.users,
+        quizzes: updated.quizzes,
+        materials: updated.materials,
+        quizResults: updated.quizResults
+      }).catch(err => console.warn('[Auto GAS Sync Error]:', err.message));
+    }
+
+    res.json({ success: true, message: 'Data berhasil disimpan di server dan disinkronkan', data: updated });
   } catch (err: any) {
     console.error('Error saving app data:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal menyimpan data di server' });
+  }
+});
+
+// Dedicated user change password API endpoint with automatic Google Sheets Webhook sync
+app.post('/api/users/change-password', async (req, res) => {
+  try {
+    const { userId, newPassword } = req.body || {};
+    if (!userId || !newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 6) {
+      return res.status(400).json({ success: false, error: 'ID Pengguna dan kata sandi baru (minimal 6 karakter) diperlukan' });
+    }
+
+    const cleanPass = newPassword.trim();
+    const appData = readAppData();
+    const userIndex = appData.users.findIndex((u: any) => u.id === userId);
+    if (userIndex === -1) {
+      return res.status(404).json({ success: false, error: 'Pengguna tidak ditemukan di database server' });
+    }
+
+    // 1. Update in local server cache
+    appData.users[userIndex].password = cleanPass;
+    appData.updatedAt = new Date().toISOString();
+    writeAppData(appData);
+
+    const targetUser = appData.users[userIndex];
+
+    // 2. Synchronize directly with Google Apps Script Webhook
+    const config = readConfig();
+    const webhookUrl = (config.webhookUrl || '').trim();
+    let gasResult = null;
+    if (webhookUrl && webhookUrl.includes('script.google.com/macros/s/')) {
+      try {
+        gasResult = await callGasServer(webhookUrl, 'changePassword', {
+          id: targetUser.id,
+          nisn: targetUser.nisn,
+          nik: targetUser.nik,
+          username: targetUser.username,
+          password: cleanPass
+        });
+      } catch (gasErr: any) {
+        console.warn('[ChangePassword GAS Sync Warning]:', gasErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Kata sandi berhasil diperbarui dan tersimpan permanen di database server dan Google Sheet',
+      gasSynced: Boolean(gasResult && gasResult.success)
+    });
+  } catch (err: any) {
+    console.error('Error in change-password endpoint:', err);
+    res.status(500).json({ success: false, error: err.message || 'Gagal mengubah kata sandi di server' });
   }
 });
 

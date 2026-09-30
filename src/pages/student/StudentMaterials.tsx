@@ -1,8 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { BookOpen, FileText, Youtube, CheckCircle2, Lock, Link as LinkIcon, Code, UploadCloud } from 'lucide-react';
+import { 
+  BookOpen, 
+  FileText, 
+  Youtube, 
+  CheckCircle2, 
+  Lock, 
+  Link as LinkIcon, 
+  Code, 
+  UploadCloud,
+  ClipboardList,
+  CalendarClock
+} from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
@@ -10,7 +21,11 @@ import { isItemForClass } from '@/lib/utils';
 
 export default function StudentMaterials() {
   const { user } = useAuthStore();
-  const { materials, markMaterialAsRead, submitAssignment } = useDataStore();
+  const { materials, markMaterialAsRead, submitAssignment, pullAllFromServer } = useDataStore();
+
+  useEffect(() => {
+    pullAllFromServer().catch(() => {});
+  }, []);
   
   // Ambil materi khusus kelas siswa ini (mendukung penugasan multi-kelas) dan urutkan
   const studentMaterials = materials
@@ -120,17 +135,50 @@ export default function StudentMaterials() {
                           )}
                         </div>
 
-                        <div className="pt-4 mt-4 border-t border-slate-100 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-                          <div className="flex-1 flex gap-2 max-w-md w-full">
-                            <Input 
-                              placeholder="Tempel link tugas Anda di sini..." 
-                              value={assignmentUrls[mat.id] || ''}
-                              onChange={e => setAssignmentUrls({...assignmentUrls, [mat.id]: e.target.value})}
-                            />
-                            <Button className="shrink-0 gap-2" onClick={() => handleAssignmentSubmit(mat.id)}>
-                              <UploadCloud className="w-4 h-4" /> Kumpulkan
-                            </Button>
+                        {/* Kotak Penugasan Siswa - HANYA TAMPIL JIKA GURU MEMBERIKAN TUGAS */}
+                        {mat.hasAssignment ? (
+                          <div className="mt-5 p-4 rounded-xl bg-amber-50/80 border border-amber-200/90 space-y-3">
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2 text-amber-950 font-bold text-sm">
+                                <div className="p-1.5 rounded-lg bg-amber-500 text-white">
+                                  <ClipboardList className="w-4 h-4" />
+                                </div>
+                                <span>Tugas: {mat.assignmentTitle || 'Penugasan Materi'}</span>
+                              </div>
+                              {mat.assignmentDueDate && (
+                                <span className="text-[11px] font-medium text-amber-800 bg-amber-100/90 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                                  <CalendarClock className="w-3.5 h-3.5 text-amber-600" />
+                                  Batas: {new Date(mat.assignmentDueDate).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}
+                                </span>
+                              )}
+                            </div>
+
+                            {mat.assignmentInstructions && (
+                              <div className="text-xs text-amber-950 bg-white/90 p-3 rounded-lg border border-amber-200/60 leading-relaxed whitespace-pre-line">
+                                <div className="font-semibold text-amber-800 mb-1">Petunjuk & Instruksi Tugas:</div>
+                                {mat.assignmentInstructions}
+                              </div>
+                            )}
+
+                            <div className="pt-1 flex flex-col sm:flex-row gap-2">
+                              <Input 
+                                placeholder="Tempel link pengumpulan tugas Anda (Google Drive / Dokumen / dsb)..." 
+                                value={assignmentUrls[mat.id] || ''}
+                                onChange={e => setAssignmentUrls({...assignmentUrls, [mat.id]: e.target.value})}
+                                className="bg-white text-xs h-10"
+                              />
+                              <Button className="shrink-0 gap-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs h-10 px-4" onClick={() => handleAssignmentSubmit(mat.id)}>
+                                <UploadCloud className="w-4 h-4" /> Kumpulkan Tugas
+                              </Button>
+                            </div>
                           </div>
+                        ) : null}
+
+                        {/* Status dan Tombol Penyelesaian Pembelajaran */}
+                        <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between">
+                          <span className="text-xs text-slate-400">
+                            {mat.hasAssignment ? 'Materi ini memiliki tugas yang perlu dikumpulkan' : 'Materi mandiri (tanpa penugasan)'}
+                          </span>
                           <button 
                             onClick={() => toggleRead(mat.id)}
                             disabled={isRead}

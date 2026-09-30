@@ -26,54 +26,40 @@ import { ViolationLog, QuizResult, Quiz } from '@/types';
 import ExamRulesModal from '@/components/student/ExamRulesModal';
 import QuestionMediaRenderer from '@/components/quiz/QuestionMediaRenderer';
 
-// Fallback Mock Quiz if quiz not found in store
-const DEFAULT_QUIZ: Quiz = {
-  id: 'q-1',
-  materialId: 'm-1',
-  classId: '7A',
-  subjectId: 'Matematika',
-  title: 'Ulangan Harian: Aljabar Dasar & Persamaan Linear',
-  durationMinutes: 45,
-  createdAt: new Date().toISOString(),
-  questions: [
-    { 
-      id: 'q1', 
-      text: 'Berapakah nilai x dari persamaan 2x + 5 = 15?', 
-      options: ['x = 5', 'x = 10', 'x = 15', 'x = 20'],
-      correctOptionIndex: 0,
-      points: 25
-    },
-    { 
-      id: 'q2', 
-      text: 'Jika y = 3x - 4 dan x = 2, berapakah nilai y?', 
-      options: ['y = 2', 'y = -2', 'y = 1', 'y = -1'],
-      correctOptionIndex: 0,
-      points: 25
-    },
-    { 
-      id: 'q3', 
-      text: 'Bentuk sederhana dari 3(x + 2) - 2x adalah...', 
-      options: ['x + 6', '5x + 6', 'x + 2', '5x + 2'],
-      correctOptionIndex: 0,
-      points: 25
-    },
-    { 
-      id: 'q4', 
-      text: 'Nilai dari -5 + 12 - (-3) adalah...', 
-      options: ['10', '4', '14', '7'],
-      correctOptionIndex: 0,
-      points: 25
-    }
-  ]
-};
-
 export default function StudentQuizCBT() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { quizzes, submitQuiz } = useDataStore();
 
-  const activeQuiz = quizzes.find(q => q.id === id) || DEFAULT_QUIZ;
+  const activeQuiz = quizzes.find(q => q.id === id);
+  const storageKey = `cbt_session_${user?.id || 'guest'}_${id}`;
+
+  // Check saved CBT session from localStorage
+  const [savedSession, setSavedSession] = useState<{
+    quizId: string;
+    studentId: string;
+    currentIdx: number;
+    answers: Record<string, number>;
+    timeLeft: number;
+    lastSavedAt: number;
+    violationLogs: ViolationLog[];
+    isFinished: boolean;
+  } | null>(() => {
+    try {
+      const raw = localStorage.getItem(`cbt_session_${user?.id || 'guest'}_${id}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && !parsed.isFinished && parsed.quizId === id) {
+          return parsed;
+        }
+      }
+    } catch (e) {}
+    return null;
+  });
+
+  const [isResumed, setIsResumed] = useState(false);
+  const gracePeriodUntilRef = useRef<number>(0);
 
   // Pre-exam setup state
   const [hasStarted, setHasStarted] = useState(false);
@@ -83,17 +69,54 @@ export default function StudentQuizCBT() {
   const [cameraPermission, setCameraPermission] = useState<'pending' | 'granted' | 'unavailable'>('pending');
   const [isInitializingStreams, setIsInitializingStreams] = useState(false);
 
-  // In-exam state
-  const [currentIdx, setCurrentIdx] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
-  const [timeLeft, setTimeLeft] = useState(activeQuiz.durationMinutes * 60);
+  // In-exam state initialized from saved session if available
+  const [currentIdx, setCurrentIdx] = useState(() => savedSession?.currentIdx || 0);
+  const [answers, setAnswers] = useState<Record<string, number>>(() => savedSession?.answers || {});
+  const [timeLeft, setTimeLeft] = useState(() => {
+    if (savedSession && activeQuiz) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - (savedSession.lastSavedAt || Date.now())) / 1000));
+      return Math.max(10, savedSession.timeLeft - elapsed);
+    }
+    return (activeQuiz?.durationMinutes || 45) * 60;
+  });
   const [isFinished, setIsFinished] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Anti-Cheat Proctoring state
-  const [violationLogs, setViolationLogs] = useState<ViolationLog[]>([]);
+  const [violationLogs, setViolationLogs] = useState<ViolationLog[]>(() => savedSession?.violationLogs || []);
   const [showViolationModal, setShowViolationModal] = useState(false);
   const [latestViolation, setLatestViolation] = useState<ViolationLog | null>(null);
+
+  // Auto-Save CBT Progress to LocalStorage so refresh / quota disconnect does not lose answers or position
+  useEffect(() => {
+    if (!hasStarted || isFinished || !activeQuiz || !user) return;
+    try {
+      const sessionData = {
+        quizId: activeQuiz.id,
+        studentId: user.id,
+        currentIdx,
+        answers,
+        timeLeft,
+        violationLogs,
+        lastSavedAt: Date.now(),
+        isFinished: false
+      };
+      localStorage.setItem(storageKey, JSON.stringify(sessionData));
+    } catch (e) {}
+  }, [hasStarted, isFinished, currentIdx, answers, timeLeft, violationLogs, activeQuiz?.id, user?.id, storageKey]);
+
+  // Prevent accidental tab closing or page refresh while taking exam
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasStarted && !isFinished) {
+        e.preventDefault();
+        e.returnValue = 'Ujian sedang berlangsung! Seluruh progres dan jawaban Anda tersimpan otomatis. Yakin ingin keluar?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasStarted, isFinished]);
 
   // Media Stream references
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -238,8 +261,31 @@ export default function StudentQuizCBT() {
   };
 
   // Start CBT & Proctoring initialization
-  const handleStartExam = async () => {
+  const handleStartExam = async (resumeMode = false) => {
     setIsInitializingStreams(true);
+    // 6-second grace period after starting/resuming to prevent false positive window blur or fullscreen exit violations
+    gracePeriodUntilRef.current = Date.now() + 6000;
+
+    if (savedSession && resumeMode) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - (savedSession.lastSavedAt || Date.now())) / 1000));
+      const remainingTime = Math.max(10, (savedSession.timeLeft || ((activeQuiz?.durationMinutes || 45) * 60)) - elapsed);
+      setTimeLeft(remainingTime);
+      setAnswers(savedSession.answers || {});
+      setCurrentIdx(Math.min(savedSession.currentIdx || 0, (activeQuiz?.questions?.length || 1) - 1));
+      setViolationLogs(savedSession.violationLogs || []);
+      setIsResumed(true);
+      toast.success(`Melanjutkan kuis dari nomor ${(savedSession.currentIdx || 0) + 1}. Seluruh jawaban sebelumnya berhasil dipulihkan.`);
+    } else if (!resumeMode && savedSession) {
+      try {
+        localStorage.removeItem(storageKey);
+      } catch (e) {}
+      setSavedSession(null);
+      setAnswers({});
+      setCurrentIdx(0);
+      setTimeLeft((activeQuiz?.durationMinutes || 45) * 60);
+      setViolationLogs([]);
+      setIsResumed(false);
+    }
 
     try {
       // 1. Enter Fullscreen
@@ -298,7 +344,7 @@ export default function StudentQuizCBT() {
       }
 
       setHasStarted(true);
-      toast.success('Mode Ujian CBT & Pengawas Anti-Kecurangan telah aktif!');
+      toast.success(resumeMode ? 'Sesi ujian dilanjutkan dengan aman!' : 'Mode Ujian CBT & Pengawas Anti-Kecurangan telah aktif!');
     } catch (err: any) {
       toast.error('Gagal memulai mode pengawas: ' + err.message);
     } finally {
@@ -308,6 +354,7 @@ export default function StudentQuizCBT() {
 
   const recordViolation = (type: ViolationLog['type'], description: string, durationSeconds: number = 0) => {
     if (isFinished || isTerminatedRef.current) return;
+    if (Date.now() < gracePeriodUntilRef.current) return;
 
     const log = captureViolationSnapshot(type, description, durationSeconds);
     
@@ -435,7 +482,7 @@ export default function StudentQuizCBT() {
 
   // Finish exam & submit results
   const handleFinish = async (currentViolations = violationLogs, isDisqualified = false) => {
-    if (isFinished) return;
+    if (isFinished || !activeQuiz) return;
     setIsFinished(true);
     setIsSubmitting(true);
     stopAllMediaStreams();
@@ -482,6 +529,11 @@ export default function StudentQuizCBT() {
 
     try {
       await submitQuiz(finalResult);
+      // Clean up saved session from localStorage on completion
+      try {
+        localStorage.removeItem(storageKey);
+        setSavedSession(null);
+      } catch (err) {}
       toast.success('Jawaban & Laporan Integritas berhasil disimpan');
     } catch (e: any) {
       console.error('Submit error', e);
@@ -503,6 +555,26 @@ export default function StudentQuizCBT() {
       <video ref={webcamVideoRef} autoPlay playsInline muted />
     </div>
   );
+
+  // Fallback if quiz is not found
+  if (!activeQuiz) {
+    return (
+      <div className="max-w-md mx-auto py-16 px-4 text-center">
+        <Card className="p-8 space-y-4 shadow-md border-slate-200">
+          <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto border border-amber-200">
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-800">Kuis Tidak Ditemukan</h2>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Data kuis tidak tersedia atau telah dihapus oleh guru pengampu. Silakan periksa daftar kuis kelas Anda.
+          </p>
+          <Button onClick={() => navigate('/student/quizzes')} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs">
+            Kembali ke Daftar Kuis
+          </Button>
+        </Card>
+      </div>
+    );
+  }
 
   // 1. PRE-EXAM INTEGRITY CHECK SCREEN
   if (!hasStarted) {
@@ -531,6 +603,32 @@ export default function StudentQuizCBT() {
                 <span className="text-lg font-bold text-slate-800">{activeQuiz.questions.length} Butir</span>
               </div>
             </div>
+
+            {/* Kotak Pemulihan Progres jika Siswa Mengalami Kendala (Refresh / Kuota Habis) */}
+            {savedSession && (
+              <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-4 space-y-3 text-emerald-950 animate-in fade-in">
+                <div className="flex items-center gap-2 font-bold text-emerald-900 text-sm">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  Ditemukan Sesi Pengerjaan Tersimpan
+                </div>
+                <p className="text-xs text-emerald-800 leading-relaxed">
+                  Sistem mendeteksi Anda sebelumnya telah mulai mengerjakan kuis ini. Progres dan jawaban Anda aman tersimpan:
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200">
+                    <span className="text-slate-500 block text-[10px]">Posisi Terakhir:</span>
+                    <strong className="text-slate-800 text-sm font-bold">Soal Nomor {(savedSession.currentIdx || 0) + 1}</strong>
+                  </div>
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-200">
+                    <span className="text-slate-500 block text-[10px]">Soal Terjawab:</span>
+                    <strong className="text-slate-800 text-sm font-bold">{Object.keys(savedSession.answers || {}).length} dari {activeQuiz.questions.length}</strong>
+                  </div>
+                </div>
+                <div className="text-[11px] text-emerald-700 bg-white/60 p-2 rounded-lg border border-emerald-200/50">
+                  ✨ Anda dapat langsung melanjutkan dari nomor terakhir tanpa harus mengulang dari awal.
+                </div>
+              </div>
+            )}
 
             {/* Anti-Cheat Rules Box */}
             {activeQuiz.startTime && new Date(activeQuiz.startTime) > new Date() ? (
@@ -620,6 +718,27 @@ export default function StudentQuizCBT() {
               >
                 Ujian Telah Ditutup
               </Button>
+            ) : savedSession ? (
+              <div className="space-y-2 pt-1">
+                <Button 
+                  onClick={() => handleStartExam(true)} 
+                  isLoading={isInitializingStreams}
+                  className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 text-sm shadow-md rounded-xl transition-all"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Lanjutkan Ujian (Soal No. {(savedSession.currentIdx || 0) + 1})
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm('Yakin ingin membatalkan progres tersimpan dan mengulang ujian dari nomor 1? Seluruh jawaban sebelumnya akan dihapus.')) {
+                      handleStartExam(false);
+                    }
+                  }}
+                  className="w-full py-2 text-xs text-slate-500 hover:text-rose-600 transition-colors"
+                >
+                  Ulangi dari Awal (Hapus Progres Tersimpan)
+                </button>
+              </div>
             ) : (
               <Button 
                 onClick={() => setShowRulesModal(true)} 
@@ -639,7 +758,7 @@ export default function StudentQuizCBT() {
           isLoading={isInitializingStreams}
           onAgreeAndStart={async () => {
             setShowRulesModal(false);
-            await handleStartExam();
+            await handleStartExam(false);
           }}
           quiz={activeQuiz}
           student={user}
@@ -740,6 +859,11 @@ export default function StudentQuizCBT() {
           <div className="flex items-center gap-2 truncate pr-4">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
             <h1 className="font-bold text-slate-800 truncate text-sm sm:text-base">{activeQuiz.title}</h1>
+            {isResumed && (
+              <span className="hidden sm:inline-flex text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Melanjutkan Sesi
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
@@ -781,13 +905,31 @@ export default function StudentQuizCBT() {
         {/* Question Card */}
         <Card className="min-h-[420px] shadow-sm">
           <CardContent className="p-6 md:p-8">
-            <div className="mb-6 flex items-center justify-between">
-              <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg">
-                Soal Nomor {currentIdx + 1} dari {activeQuiz.questions.length}
-              </span>
-              <span className="text-xs text-slate-400 font-medium">
-                Poin: {currentQ?.points || 10}
-              </span>
+            <div className="mb-6 flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg">
+                  Soal Nomor {currentIdx + 1} dari {activeQuiz.questions.length}
+                </span>
+                {answers[currentQ?.id] !== undefined ? (
+                  <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1 font-medium">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Tersimpan Otomatis
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400">
+                    Belum dijawab
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {isResumed && (
+                  <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Sesi Dipulihkan
+                  </span>
+                )}
+                <span className="text-xs text-slate-400 font-medium">
+                  Poin: {currentQ?.points || 10}
+                </span>
+              </div>
             </div>
 
             <p className="text-base sm:text-lg text-slate-800 font-medium mb-5 leading-relaxed">

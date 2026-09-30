@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database, KeyRound, RefreshCw } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database, KeyRound, RefreshCw, Smartphone } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -9,6 +9,7 @@ import { useDataStore } from '@/store/dataStore';
 import { toast } from '@/components/ui/Toast';
 import { motion, AnimatePresence } from 'motion/react';
 import ChangePasswordModal from '@/components/common/ChangePasswordModal';
+import { PWAInstallButton } from '@/components/common/PWAInstallButton';
 
 const adminNav = [
   { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
@@ -16,6 +17,7 @@ const adminNav = [
   { name: 'Guru & Siswa', href: '/admin/students', icon: Users },
   { name: 'Pengaturan Aplikasi', href: '/admin/settings', icon: Settings },
   { name: 'Integrasi GAS', href: '/admin/gas', icon: Settings },
+  { name: 'Aplikasi Android', href: '/admin/android', icon: Smartphone },
 ];
 
 const teacherNav = [
@@ -230,6 +232,11 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
               {isCheckingGas ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : 'Cek'}
             </button>
           </div>
+        </div>
+
+        {/* Pasang Aplikasi Android Shortcut */}
+        <div className="p-3 border-t border-slate-200 bg-indigo-50/40">
+          <PWAInstallButton variant="pill" className="w-full justify-center text-center" />
         </div>
 
         <div className="p-4 border-t border-slate-200 space-y-1">

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BookOpen, GraduationCap, Users, ShieldCheck, ChevronRight } from 'lucide-react';
+import { BookOpen, GraduationCap, Users, ShieldCheck, ChevronRight, Smartphone } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { PWAInstallButton } from '@/components/common/PWAInstallButton';
 import { motion } from 'motion/react';
 
 export default function LandingPage() {
@@ -12,11 +13,12 @@ export default function LandingPage() {
       {/* Navbar */}
       <nav className="border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
+          <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl cursor-pointer" onClick={() => navigate('/')}>
             <BookOpen className="w-8 h-8" />
             <span>SmartLMS</span>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <PWAInstallButton variant="pill" className="hidden sm:inline-flex" />
             <Button variant="ghost" onClick={() => navigate('/login')}>Masuk</Button>
             <Button onClick={() => navigate('/login')}>Mulai Belajar</Button>
           </div>
@@ -24,7 +26,7 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="pt-24 pb-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto text-center">
+      <section className="pt-20 pb-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto text-center">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -38,16 +40,21 @@ export default function LandingPage() {
             Platform Belajar Digital <br className="hidden md:block" />
             <span className="text-indigo-600">Sekolah Menengah Pertama</span>
           </h1>
-          <p className="text-lg text-slate-600 max-w-2xl mx-auto mb-10 leading-relaxed">
+          <p className="text-lg text-slate-600 max-w-2xl mx-auto mb-8 leading-relaxed">
             Sistem manajemen pembelajaran modern terintegrasi yang memudahkan interaksi antara guru, siswa, dan materi pelajaran secara realtime dan tersinkronisasi.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+
+          <div className="flex flex-col sm:flex-row gap-3 justify-center mb-6">
             <Button size="lg" className="gap-2" onClick={() => navigate('/login')}>
               Masuk ke Portal Siswa <ChevronRight className="w-5 h-5" />
             </Button>
             <Button size="lg" variant="outline" onClick={() => navigate('/login?tab=teacher')}>
               Portal Guru & Admin
             </Button>
+          </div>
+
+          <div className="flex justify-center">
+            <PWAInstallButton variant="pill" />
           </div>
         </motion.div>
       </section>

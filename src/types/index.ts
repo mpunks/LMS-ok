@@ -45,6 +45,10 @@ export interface Material {
   semester: number;
   chapter: string;
   order: number; // For sequential learning
+  hasAssignment?: boolean; // Apakah ada tugas untuk materi ini
+  assignmentTitle?: string; // Judul penugasan
+  assignmentInstructions?: string; // Petunjuk / instruksi tugas
+  assignmentDueDate?: string; // Batas akhir pengumpulan (YYYY-MM-DDTHH:mm)
 }
 
 export interface Quiz {

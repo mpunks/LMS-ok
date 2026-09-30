@@ -1,8 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { BookOpen, Plus, FileText, Youtube, Trash2, Edit2, Link as LinkIcon, Code } from 'lucide-react';
+import { 
+  BookOpen, 
+  Plus, 
+  FileText, 
+  Youtube, 
+  Trash2, 
+  Edit2, 
+  Link as LinkIcon, 
+  Code,
+  ClipboardList,
+  CalendarClock
+} from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
@@ -12,7 +23,11 @@ import ManageTeacherClassesModal from '@/components/teacher/ManageTeacherClasses
 
 export default function TeacherMaterials() {
   const { user } = useAuthStore();
-  const { materials, addMaterial, updateMaterial, deleteMaterial } = useDataStore();
+  const { materials, addMaterial, updateMaterial, deleteMaterial, pullAllFromServer } = useDataStore();
+
+  useEffect(() => {
+    pullAllFromServer().catch(() => {});
+  }, []);
   
   // Normalize assignedClasses to string array
   const assignedClasses = Array.isArray(user?.assignedClasses)
@@ -36,7 +51,11 @@ export default function TeacherMaterials() {
     content: '', 
     url: '', 
     chapter: 'Bab 1', 
-    order: 1 
+    order: 1,
+    hasAssignment: false,
+    assignmentTitle: '',
+    assignmentInstructions: '',
+    assignmentDueDate: ''
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -62,6 +81,10 @@ export default function TeacherMaterials() {
       pdfUrl: formData.type === 'PDF' ? formData.url : undefined,
       youtubeUrl: formData.type === 'VIDEO' ? formData.url : undefined,
       linkUrl: formData.type === 'LINK' ? formData.url : undefined,
+      hasAssignment: Boolean(formData.hasAssignment),
+      assignmentTitle: formData.hasAssignment ? (formData.assignmentTitle || formData.title) : undefined,
+      assignmentInstructions: formData.hasAssignment ? formData.assignmentInstructions : undefined,
+      assignmentDueDate: formData.hasAssignment ? formData.assignmentDueDate : undefined,
     };
 
     try {
@@ -93,7 +116,11 @@ export default function TeacherMaterials() {
       content: mat.content || '',
       chapter: mat.chapter || '',
       order: mat.order || 1,
-      url: mat.pdfUrl || mat.youtubeUrl || mat.linkUrl || ''
+      url: mat.pdfUrl || mat.youtubeUrl || mat.linkUrl || '',
+      hasAssignment: Boolean(mat.hasAssignment),
+      assignmentTitle: mat.assignmentTitle || '',
+      assignmentInstructions: mat.assignmentInstructions || '',
+      assignmentDueDate: mat.assignmentDueDate || ''
     });
     setIsEdit(true);
     setShowForm(true);
@@ -130,7 +157,11 @@ export default function TeacherMaterials() {
             content: '', 
             url: '', 
             chapter: 'Bab 1', 
-            order: teacherMaterials.length + 1 
+            order: teacherMaterials.length + 1,
+            hasAssignment: false,
+            assignmentTitle: '',
+            assignmentInstructions: '',
+            assignmentDueDate: ''
           });
           setShowForm(!showForm);
         }}>
@@ -223,6 +254,67 @@ export default function TeacherMaterials() {
                 ></textarea>
               </div>
 
+              {/* Form Penugasan Siswa (Opsional) */}
+              <div className="md:col-span-2 p-4 rounded-xl border border-amber-200 bg-amber-50/40 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-lg ${formData.hasAssignment ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-200 text-slate-500'}`}>
+                      <ClipboardList className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Penugasan Siswa untuk Materi Ini (Opsional)</div>
+                      <div className="text-[11px] text-slate-500">
+                        Jika diaktifkan, kolom pengumpulan tugas akan muncul di akun siswa. Jika dinonaktifkan, siswa hanya membaca materi tanpa tugas.
+                      </div>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={formData.hasAssignment} 
+                      onChange={e => setFormData({ ...formData, hasAssignment: e.target.checked })} 
+                      className="sr-only peer" 
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                  </label>
+                </div>
+
+                {formData.hasAssignment && (
+                  <div className="pt-3 border-t border-amber-200/60 space-y-3 animate-in fade-in">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Input 
+                        label="Judul / Nama Tugas" 
+                        placeholder="Contoh: Lembar Kerja Mandiri Bab 1" 
+                        value={formData.assignmentTitle} 
+                        onChange={e => setFormData({ ...formData, assignmentTitle: e.target.value })} 
+                      />
+                      <div>
+                        <label className="text-xs font-medium text-slate-700 block mb-1.5 flex items-center gap-1">
+                          <CalendarClock className="w-3.5 h-3.5 text-slate-400" /> Batas Waktu Pengumpulan (Deadline - Opsional)
+                        </label>
+                        <input 
+                          type="datetime-local" 
+                          value={formData.assignmentDueDate} 
+                          onChange={e => setFormData({ ...formData, assignmentDueDate: e.target.value })} 
+                          className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs outline-none focus:border-indigo-500" 
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700 block mb-1.5">
+                        Petunjuk & Instruksi Pengerjaan Tugas untuk Siswa
+                      </label>
+                      <textarea 
+                        className="w-full rounded-lg border border-slate-300 p-3 bg-white min-h-[80px] text-xs outline-none focus:border-indigo-500" 
+                        value={formData.assignmentInstructions} 
+                        onChange={e => setFormData({ ...formData, assignmentInstructions: e.target.value })} 
+                        placeholder="Tuliskan petunjuk tugas (misal: Kerjakan latihan soal hal. 20 di buku catatan, foto dan unggah ke Google Drive Anda, lalu tempel tautannya di kolom pengumpulan)..." 
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="md:col-span-2 flex justify-end gap-2 mt-4">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(false)}>Batal</Button>
                 <Button type="submit" size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white">
@@ -271,7 +363,15 @@ export default function TeacherMaterials() {
                   <div className="text-[11px] text-slate-400 mb-2">
                     {mat.chapter} • {mat.subjectId || 'Mata Pelajaran'}
                   </div>
-                  <p className="text-xs text-slate-500 line-clamp-2 mb-4">{mat.content}</p>
+                  <p className="text-xs text-slate-500 line-clamp-2 mb-3">{mat.content}</p>
+
+                  {/* Badge penugasan jika materi ini memiliki tugas */}
+                  {mat.hasAssignment && (
+                    <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-[11px] text-amber-900 flex items-center gap-1.5 font-medium mb-3">
+                      <ClipboardList className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span className="truncate">Ada Tugas: {mat.assignmentTitle || 'Penugasan Siswa'}</span>
+                    </div>
+                  )}
                 </div>
                 
                 <div className="flex gap-2 mt-auto pt-4 border-t border-slate-100">

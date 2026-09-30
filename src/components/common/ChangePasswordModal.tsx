@@ -21,7 +21,7 @@ interface ChangePasswordModalProps {
 
 export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordModalProps) {
   const { user, updateCurrentUser } = useAuthStore();
-  const { updateUser } = useDataStore();
+  const { updateUser, changePassword } = useDataStore();
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -104,13 +104,13 @@ export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordM
 
     setIsSubmitting(true);
     try {
-      // 1. Update in dataStore (which also syncs to server /api/data & GAS)
-      await updateUser(user.id, { password: cleanNew });
+      // 1. Update in dataStore (syncs to server /api/data, /api/users/change-password, and GAS Webhook)
+      await changePassword(user.id, cleanNew);
 
       // 2. Update active session user
       updateCurrentUser({ password: cleanNew });
 
-      toast.success('Kata sandi berhasil diperbarui! Harap catat dan simpan kata sandi baru Anda.');
+      toast.success('Kata sandi berhasil diperbarui dan tersimpan permanen di Google Sheet!');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');

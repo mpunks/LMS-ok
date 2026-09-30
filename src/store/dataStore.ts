@@ -25,6 +25,7 @@ interface DataState {
   updateUser: (id: string, data: Partial<User>) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
   resetPassword: (id: string, defaultPassword: string) => Promise<void>;
+  changePassword: (id: string, newPassword: string) => Promise<{ success: boolean; message?: string }>;
 
   // Student Lifecycle Management
   deleteAllStudents: () => Promise<number>;
@@ -94,56 +95,7 @@ export const useDataStore = create<DataState>()(
         { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User
       ],
       materials: [] as Material[],
-      quizzes: [
-        {
-          id: 'quiz-cbt-1',
-          title: 'Penilaian Harian CBT Matematika: Bangun Datar & Aljabar',
-          subjectId: 'Matematika',
-          classId: '7A',
-          durationMinutes: 45,
-          isScheduled: true,
-          startTime: new Date(Date.now() - 3600000).toISOString().slice(0, 16),
-          endTime: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 16),
-          createdAt: new Date().toISOString(),
-          questions: [
-            {
-              id: 'q-med-1',
-              text: 'Perhatikan gambar bangun datar berikut. Jika panjang sisi sejajar masing-masing 10 cm dan 22 cm, serta tingginya 8 cm, berapakah luas bangun trapesium tersebut?',
-              options: ['128 cm²', '144 cm²', '160 cm²', '176 cm²'],
-              correctOptionIndex: 0,
-              points: 25,
-              imageUrl: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?auto=format&fit=crop&w=800&q=80',
-              explanation: 'Rumus Luas Trapesium = ½ × (a + b) × t = ½ × (10 + 22) × 8 = ½ × 32 × 8 = 128 cm².'
-            },
-            {
-              id: 'q-med-2',
-              text: 'Simak video penjelasan konsep geometri berikut. Berdasarkan prinsip segitiga siku-siku, jika alas 6 cm dan tinggi 8 cm, berapakah panjang sisi miringnya?',
-              options: ['9 cm', '10 cm', '12 cm', '14 cm'],
-              correctOptionIndex: 1,
-              points: 25,
-              videoUrl: 'https://www.youtube.com/watch?v=AA6RfgP-AHU',
-              explanation: 'c = √(6² + 8²) = √(36 + 64) = √100 = 10 cm.'
-            },
-            {
-              id: 'q-med-3',
-              text: 'Dengarkan rekaman instrumen audio listening berikut. Berapakah hasil perhitungan aljabar dari 12 dikali 3?',
-              options: ['24 butir', '36 butir', '48 butir', '60 butir'],
-              correctOptionIndex: 1,
-              points: 25,
-              audioUrl: 'https://actions.google.com/sounds/v1/science/ambient_music.ogg',
-              explanation: 'Hasil perhitungan adalah 12 × 3 = 36.'
-            },
-            {
-              id: 'q-med-4',
-              text: 'Bentuk paling sederhana dari aljabar 5x + 3y - 2x + 7y adalah...',
-              options: ['3x + 10y', '7x + 10y', '3x - 4y', '10x + 3y'],
-              correctOptionIndex: 0,
-              points: 25,
-              explanation: 'Suku sejenis dikelompokkan: (5x - 2x) + (3y + 7y) = 3x + 10y.'
-            }
-          ]
-        }
-      ] as Quiz[],
+      quizzes: [] as Quiz[],
       quizResults: [] as QuizResult[],
 
       // Actions
@@ -244,8 +196,17 @@ export const useDataStore = create<DataState>()(
       },
       updateUser: async (id, data) => {
         set(state => ({ users: state.users.map(u => u.id === id ? { ...u, ...data } : u) }));
-        syncToServer({ users: useDataStore.getState().users });
-        await syncToGas('updateUser', { id, data });
+        const allUsers = useDataStore.getState().users;
+        syncToServer({ users: allUsers });
+        const userObj = allUsers.find(u => u.id === id);
+        await syncToGas('updateUser', { 
+          id, 
+          nisn: userObj?.nisn, 
+          nik: userObj?.nik, 
+          username: userObj?.username, 
+          data, 
+          password: data.password 
+        });
       },
       deleteUser: async (id) => {
         set(state => ({ users: state.users.filter(u => u.id !== id) }));
@@ -258,6 +219,48 @@ export const useDataStore = create<DataState>()(
         }));
         syncToServer({ users: useDataStore.getState().users });
         await syncToGas('resetPassword', { id, password: defaultPassword });
+      },
+      changePassword: async (id: string, newPassword: string) => {
+        const cleanPass = newPassword.trim();
+        const user = get().users.find(u => u.id === id);
+        
+        // 1. Update state
+        set(state => ({
+          users: state.users.map(u => u.id === id ? { ...u, password: cleanPass } : u)
+        }));
+        
+        // 2. Sync to server /api/data and /api/users/change-password
+        const updatedUsers = get().users;
+        syncToServer({ users: updatedUsers });
+        
+        try {
+          await fetch('/api/users/change-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: id, newPassword: cleanPass })
+          });
+        } catch (e) {}
+
+        // 3. Direct Google Apps Script sync with multiple match keys
+        const res = await syncToGas('changePassword', {
+          id,
+          nisn: user?.nisn,
+          nik: user?.nik,
+          username: user?.username,
+          password: cleanPass
+        });
+        
+        // Also call updateUser in GAS as extra fallback guarantee
+        await syncToGas('updateUser', {
+          id,
+          nisn: user?.nisn,
+          nik: user?.nik,
+          username: user?.username,
+          data: { password: cleanPass },
+          password: cleanPass
+        }).catch(() => {});
+
+        return res || { success: true };
       },
 
       // Student Lifecycle Management
@@ -493,20 +496,33 @@ export const useDataStore = create<DataState>()(
             const currentUsers = state.users;
             const fetchedUsers: User[] = Array.isArray(res.users) ? res.users : [];
             
-            // Merge users, protecting Super Admin
+            // Merge users, protecting Super Admin and custom passwords
             const userMap = new Map<string, User>();
             for (const u of currentUsers) userMap.set(u.id, u);
-            for (const u of fetchedUsers) userMap.set(u.id, u);
+            for (const u of fetchedUsers) {
+              const existing = userMap.get(u.id);
+              const finalPass = (u.password && u.password.trim()) ? u.password.trim() : (existing ? existing.password : '');
+              userMap.set(u.id, {
+                ...(existing || {}),
+                ...u,
+                password: finalPass
+              });
+            }
 
             // Ensure Super Admin exists
             if (!userMap.has('sa-1')) {
               userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
             }
 
+            const cleanGasQuizzes = (Array.isArray(res.quizzes) ? res.quizzes : state.quizzes)
+              .filter((q: Quiz) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
+            const cleanGasMaterials = Array.isArray(res.materials) ? res.materials : state.materials;
+
             return {
               users: Array.from(userMap.values()),
-              quizzes: Array.isArray(res.quizzes) && res.quizzes.length > 0 ? res.quizzes : state.quizzes,
-              materials: Array.isArray(res.materials) && res.materials.length > 0 ? res.materials : state.materials
+              quizzes: cleanGasQuizzes,
+              materials: cleanGasMaterials,
+              quizResults: state.quizResults
             };
           });
           return true;
@@ -523,7 +539,15 @@ export const useDataStore = create<DataState>()(
           set(state => {
             const userMap = new Map<string, User>();
             for (const u of state.users) userMap.set(u.id, u);
-            for (const u of res.users) userMap.set(u.id, u);
+            for (const u of res.users) {
+              const existing = userMap.get(u.id);
+              const finalPass = (u.password && u.password.trim()) ? u.password.trim() : (existing ? existing.password : '');
+              userMap.set(u.id, {
+                ...(existing || {}),
+                ...u,
+                password: finalPass
+              });
+            }
             if (!userMap.has('sa-1')) {
               userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
             }
@@ -541,42 +565,43 @@ export const useDataStore = create<DataState>()(
           if (json && json.success && json.data) {
             const serverData = json.data;
             set(state => {
-              // Users merge
+              // Users merge with password protection
               const userMap = new Map<string, User>();
               for (const u of state.users) userMap.set(u.id, u);
               if (Array.isArray(serverData.users)) {
-                for (const u of serverData.users) userMap.set(u.id, u);
+                for (const u of serverData.users) {
+                  const existing = userMap.get(u.id);
+                  const finalPass = (u.password && u.password.trim()) ? u.password.trim() : (existing ? existing.password : '');
+                  userMap.set(u.id, {
+                    ...(existing || {}),
+                    ...u,
+                    password: finalPass
+                  });
+                }
               }
               if (!userMap.has('sa-1')) {
                 userMap.set('sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
               }
 
-              // Materials merge
-              const matMap = new Map<string, Material>();
-              for (const m of state.materials) matMap.set(m.id, m);
-              if (Array.isArray(serverData.materials) && serverData.materials.length > 0) {
-                for (const m of serverData.materials) matMap.set(m.id, m);
-              }
+              // Materials: server is authoritative
+              const serverMaterials = Array.isArray(serverData.materials)
+                ? serverData.materials
+                : state.materials;
 
-              // Quizzes merge
-              const quizMap = new Map<string, Quiz>();
-              for (const q of state.quizzes) quizMap.set(q.id, q);
-              if (Array.isArray(serverData.quizzes) && serverData.quizzes.length > 0) {
-                for (const q of serverData.quizzes) quizMap.set(q.id, q);
-              }
+              // Quizzes: server is authoritative and filtered
+              const cleanQuizzes = (Array.isArray(serverData.quizzes) ? serverData.quizzes : state.quizzes)
+                .filter((q: Quiz) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
 
-              // Results merge
-              const resMap = new Map<string, QuizResult>();
-              for (const r of state.quizResults) resMap.set(r.id, r);
-              if (Array.isArray(serverData.quizResults) && serverData.quizResults.length > 0) {
-                for (const r of serverData.quizResults) resMap.set(r.id, r);
-              }
+              // Results: server is authoritative
+              const serverResults = Array.isArray(serverData.quizResults)
+                ? serverData.quizResults
+                : state.quizResults;
 
               return {
                 users: Array.from(userMap.values()),
-                materials: Array.from(matMap.values()),
-                quizzes: Array.from(quizMap.values()),
-                quizResults: Array.from(resMap.values())
+                materials: serverMaterials,
+                quizzes: cleanQuizzes,
+                quizResults: serverResults
               };
             });
             return true;

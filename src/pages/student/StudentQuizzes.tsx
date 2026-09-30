@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Play, Clock, HelpCircle, AlertTriangle, CheckCircle2, FileText, ShieldAlert, CalendarClock, Lock } from 'lucide-react';
@@ -12,7 +12,11 @@ import ExamRulesModal from '@/components/student/ExamRulesModal';
 export default function StudentQuizzes() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { quizzes, quizResults } = useDataStore();
+  const { quizzes, quizResults, pullAllFromServer } = useDataStore();
+
+  useEffect(() => {
+    pullAllFromServer().catch(() => {});
+  }, []);
 
   const [selectedQuizForRules, setSelectedQuizForRules] = useState<any | null>(null);
 
