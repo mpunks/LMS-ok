@@ -45,8 +45,17 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          navigateFallbackDenylist: [/^\/api/],
+          skipWaiting: true,
+          clientsClaim: true,
           runtimeCaching: [
+            {
+              // Crucial: API requests must NEVER be served from service worker cache
+              urlPattern: /^\/api\/.*/i,
+              handler: 'NetworkOnly',
+            },
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',
@@ -85,7 +94,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       "alias": {
-        "@": path.resolve(__dirname, "./src")
+        "@": path.resolve(import.meta.dirname || __dirname, "./src")
       }
     },
     server: {

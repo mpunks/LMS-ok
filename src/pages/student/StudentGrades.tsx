@@ -1,39 +1,73 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
-import { BarChart, Download, GraduationCap } from 'lucide-react';
+import { BarChart, Download, GraduationCap, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { toast } from '@/components/ui/Toast';
 import { useAuthStore } from '@/store/authStore';
 import { useDataStore } from '@/store/dataStore';
+import { isResultMatchStudent, isQuizResetForStudent } from '@/lib/utils';
 
 export default function StudentGrades() {
   const { user } = useAuthStore();
-  const { users, quizResults, quizzes } = useDataStore();
-  
-  const myResults = quizResults.filter(r => r.studentId === user?.id);
-  const myClassmates = users.filter(u => u.role === 'STUDENT' && u.classId === user?.classId);
-  
-  const getStudentAverage = (studentId: string) => {
-    const results = quizResults.filter(r => r.studentId === studentId);
-    if (results.length === 0) return 0;
-    return results.reduce((acc, curr) => acc + curr.score, 0) / results.length;
+  const { users, quizResults, quizzes, resetQuizKeys, pullAllFromServer } = useDataStore();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  useEffect(() => {
+    pullAllFromServer().catch(() => {});
+  }, []);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await pullAllFromServer();
+      toast.success('Nilai akademik berhasil diperbarui');
+    } catch (e) {
+      toast.info('Gagal menyegarkan nilai');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
-  const myAvg = getStudentAverage(user?.id || '');
+  const currentStudent = users.find(u => 
+    (user?.id && u.id === user.id) || 
+    (user?.nisn && u.nisn === user.nisn) ||
+    (user?.username && u.username === user.username)
+  ) || user;
+
+  const myResults = quizResults.filter(r => 
+    isResultMatchStudent(r, currentStudent || user)
+  );
+  const myClass = currentStudent?.classId || user?.classId || '';
+  const myClassmates = users.filter(u => u.role === 'STUDENT' && (u.classId === myClass || !myClass));
+  
+  const getStudentAverage = (student: any) => {
+    const results = quizResults.filter(r => 
+      isResultMatchStudent(r, student)
+    );
+    if (results.length === 0) return 0;
+    return results.reduce((acc, curr) => {
+      const score = curr.finalScore !== undefined ? curr.finalScore : curr.score;
+      return acc + (score || 0);
+    }, 0) / results.length;
+  };
+
+  const myAvg = getStudentAverage(currentStudent || user);
   
   // Calculate Rank
-  const rankings = myClassmates.map(s => ({ id: s.id, avg: getStudentAverage(s.id) })).sort((a, b) => b.avg - a.avg);
-  const myRank = rankings.findIndex(r => r.id === user?.id) + 1;
+  const rankings = myClassmates.map(s => ({ id: s.id, avg: getStudentAverage(s) })).sort((a, b) => b.avg - a.avg);
+  const myRank = rankings.findIndex(r => r.id === (currentStudent?.id || user?.id)) + 1;
   const totalStudents = rankings.length;
 
-  // Group by subjects (using quiz metadata)
+  // Group by subjects (using quiz metadata or stored subject)
   const subjectsMap = new Map<string, { totalScore: number, count: number }>();
   myResults.forEach(r => {
     const quiz = quizzes.find(q => q.id === r.quizId);
-    if (quiz && quiz.subjectId) {
-      const existing = subjectsMap.get(quiz.subjectId) || { totalScore: 0, count: 0 };
-      subjectsMap.set(quiz.subjectId, {
-        totalScore: existing.totalScore + r.score,
+    const subj = r.subject || quiz?.subjectId;
+    if (subj) {
+      const existing = subjectsMap.get(subj) || { totalScore: 0, count: 0 };
+      const score = r.finalScore !== undefined ? r.finalScore : r.score;
+      subjectsMap.set(subj, {
+        totalScore: existing.totalScore + (score || 0),
         count: existing.count + 1
       });
     }

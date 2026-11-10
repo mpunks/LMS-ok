@@ -16,7 +16,10 @@ import {
   CalendarCheck2,
   Award,
   KeyRound,
-  ShieldAlert
+  ShieldAlert,
+  FileCheck,
+  Clock,
+  Cpu
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useDataStore } from '@/store/dataStore';
@@ -24,11 +27,12 @@ import { getGradeFromClass } from '@/data/schoolClasses';
 import { isItemForClass } from '@/lib/utils';
 import ManageTeacherClassesModal from '@/components/teacher/ManageTeacherClassesModal';
 import ChangePasswordModal from '@/components/common/ChangePasswordModal';
+import { PWAInstallButton } from '@/components/common/PWAInstallButton';
 
 export default function TeacherDashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { materials, quizzes, users } = useDataStore();
+  const { materials, quizzes, users, assignments = [] } = useDataStore();
   
   const [showClassesModal, setShowClassesModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -37,11 +41,32 @@ export default function TeacherDashboard() {
   // Assigned classes from teacher user profile
   const assignedClasses = user?.assignedClasses || [];
 
-  // Filter materials & quizzes related to teacher and assigned classes
-  const myMaterials = materials.filter(m => m.teacherId === user?.id);
+  // Filter materials & quizzes related to teacher and assigned classes with flexible matching
+  const myMaterials = materials.filter(m => {
+    if (!m) return false;
+    const matchId = user?.id && m.teacherId === user.id;
+    const matchNik = user?.nik && (m.teacherId === user.nik || (m as any).teacherNik === user.nik);
+    const matchUser = user?.username && (m.teacherId === user.username || (m as any).teacherUsername === user.username);
+    const matchName = user?.name && (m as any).teacherName && String((m as any).teacherName).toLowerCase().trim() === String(user.name).toLowerCase().trim();
+    const matchSubject = user?.subject && m.subjectId === user.subject;
+    const matchClass = assignedClasses.some(c => isItemForClass(m.classId, m.targetClasses, c));
+    return matchId || matchNik || matchUser || matchName || matchSubject || matchClass;
+  });
+
   const myQuizzes = quizzes.filter(q => 
     assignedClasses.some(c => isItemForClass(q.classId, q.targetClasses, c)) || myMaterials.some(m => m.id === q.materialId)
   );
+
+  // Submissions for this teacher's assigned classes or materials
+  const teacherSubmissions = assignments.filter(a => {
+    const student = users.find(u => u.id === a.studentId || (u.nisn && u.nisn === a.studentId));
+    if (student?.classId && assignedClasses.includes(student.classId)) return true;
+    const material = materials.find(m => m.id === a.materialId);
+    if (material && (material.teacherId === user?.id || (material as any).teacherNik === user?.nik || material.subjectId === user?.subject)) return true;
+    return false;
+  });
+  const ungradedSubmissionsCount = teacherSubmissions.filter(a => a.grade === undefined || a.grade === null || a.grade === '').length;
+  const gradedSubmissionsCount = teacherSubmissions.length - ungradedSubmissionsCount;
 
   // Total students enrolled in the teacher's assigned classes
   const studentsInAssignedClasses = users.filter(
@@ -59,51 +84,54 @@ export default function TeacherDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Welcome & Header Action Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-indigo-700 via-indigo-600 to-blue-600 rounded-2xl p-6 text-white shadow-md">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 backdrop-blur-xs text-xs font-semibold text-indigo-100">
-              <GraduationCap className="w-3.5 h-3.5" />
-              Portal Pengajar
-            </div>
-            {user?.subject && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-400/20 backdrop-blur-xs text-xs font-semibold text-emerald-100 border border-emerald-300/30">
-                <BookOpen className="w-3.5 h-3.5" />
-                Mapel: {user.subject}
-              </div>
-            )}
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-xs text-xs font-semibold text-indigo-100">
-              <span>{user?.gender === 'P' ? 'Guru Perempuan (P)' : 'Guru Laki-laki (L)'}</span>
-            </div>
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight">Selamat datang, {user?.name}</h1>
-          <p className="text-xs sm:text-sm text-indigo-100/90 max-w-xl">
-            Kelola materi, bank kuis, presensi, dan nilai khusus untuk rombel yang Anda ampu pada mata pelajaran {user?.subject || 'yang ditentukan'}.
-          </p>
-        </div>
+      {/* Welcome & Header Action Bar - rafx2 LMS */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#070e1e] via-[#0d1b3e] to-[#0a1835] border border-cyan-500/30 p-6 text-white shadow-xl shadow-cyan-950/20">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
+        <div className="absolute bottom-0 left-1/3 w-60 h-60 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
 
-        <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
-          <Button
-            onClick={() => setShowPasswordModal(true)}
-            className="bg-white/15 hover:bg-white/25 text-white font-medium text-xs sm:text-sm shadow-xs gap-1.5 py-2.5 px-3 rounded-xl border border-white/20 transition-all"
-            title="Ganti kata sandi akun guru Anda"
-          >
-            <KeyRound className="w-4 h-4 text-white" />
-            Ubah Password
-          </Button>
-          <Button
-            onClick={() => setShowClassesModal(true)}
-            className="bg-white text-indigo-700 hover:bg-indigo-50 font-bold text-xs sm:text-sm shadow-sm gap-2 py-2.5 px-4 rounded-xl border border-white/20 transition-transform active:scale-95"
-          >
-            <Edit3 className="w-4 h-4 text-indigo-600" />
-            Kelola Kelas & Mapel
-            {assignedClasses.length > 0 && (
-              <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full font-bold">
-                {assignedClasses.length}
-              </span>
-            )}
-          </Button>
+        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/15 border border-cyan-400/30 text-cyan-300 text-xs font-mono font-semibold">
+                <Cpu className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                Pusat Kendali Guru Informatika
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-xs font-semibold text-indigo-200">
+                <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                Mapel: Informatika
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-xs text-slate-300">
+                <span>{user?.gender === 'P' ? 'Guru Perempuan (P)' : 'Guru Laki-laki (L)'}</span>
+              </div>
+            </div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-white">Selamat datang, {user?.name}</h1>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
+              Pusat manajemen kurikulum Informatika &amp; AI: kelola modul computational thinking, bank kuis CBT, monitoring integritas ujian, dan evaluasi hasil belajar siswa.
+            </p>
+          </div>
+
+          <div className="relative z-10 flex flex-wrap items-center gap-2 self-start sm:self-center shrink-0">
+            <Button
+              onClick={() => setShowPasswordModal(true)}
+              className="bg-[#091124] hover:bg-white/10 text-slate-200 font-medium text-xs sm:text-sm gap-1.5 py-2.5 px-3 rounded-xl border border-slate-700 transition-all cursor-pointer"
+              title="Ganti kata sandi akun guru Anda"
+            >
+              <KeyRound className="w-4 h-4 text-cyan-400" />
+              Ubah Password
+            </Button>
+            <Button
+              onClick={() => setShowClassesModal(true)}
+              className="bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-cyan-600/20 gap-2 py-2.5 px-4 rounded-xl border border-cyan-400/30 transition-transform active:scale-95 cursor-pointer"
+            >
+              <Edit3 className="w-4 h-4 text-white" />
+              Kelola Kelas Informatika
+              {assignedClasses.length > 0 && (
+                <span className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full font-bold">
+                  {assignedClasses.length}
+                </span>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -133,6 +161,9 @@ export default function TeacherDashboard() {
           </Button>
         </div>
       )}
+
+      {/* Install Mobile App on Android & iPhone Banner */}
+      <PWAInstallButton variant="banner" className="shadow-xs" />
 
       {/* Teaching Assignment Quick Info Ribbon */}
       <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -182,8 +213,42 @@ export default function TeacherDashboard() {
         </div>
       </div>
 
+      {/* Banner Khusus Menu Guru: Tugas Yang Sudah Anak Kumpulkan */}
+      <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-600 rounded-2xl p-5 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0">
+            <FileCheck className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base font-bold">Tugas yang Sudah Anak Kumpulkan</h2>
+              {ungradedSubmissionsCount > 0 ? (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white text-amber-900 shadow-xs">
+                  {ungradedSubmissionsCount} Perlu Dinilai
+                </span>
+              ) : (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400 text-emerald-950 shadow-xs">
+                  Semua Sudah Dinilai
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-amber-100 mt-0.5">
+              Terdapat <strong>{teacherSubmissions.length} tugas</strong> dikumpulkan oleh anak-anak ({gradedSubmissionsCount} telah diberi nilai, {ungradedSubmissionsCount} menunggu nilai & umpan balik).
+            </p>
+          </div>
+        </div>
+        <Button
+          onClick={() => navigate('/teacher/assignments')}
+          className="bg-white text-amber-800 hover:bg-amber-50 font-bold text-xs gap-2 py-2.5 px-4 rounded-xl shadow-xs self-start md:self-center shrink-0 transition-transform active:scale-95 cursor-pointer"
+        >
+          <ClipboardList className="w-4 h-4 text-amber-700" />
+          Lihat & Nilai Tugas Anak
+          <ArrowRight className="w-4 h-4 text-amber-700" />
+        </Button>
+      </div>
+
       {/* Stats Summary Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {[
           { 
             title: 'Kelas Diampu', 
@@ -191,7 +256,8 @@ export default function TeacherDashboard() {
             subtext: assignedClasses.length > 0 ? `${assignedClasses.length} rombel terdaftar` : 'Klik kelola kelas',
             icon: GraduationCap, 
             color: 'text-indigo-600', 
-            bg: 'bg-indigo-50' 
+            bg: 'bg-indigo-50',
+            onClick: () => setShowClassesModal(true)
           },
           { 
             title: 'Total Siswa Diampu', 
@@ -207,26 +273,42 @@ export default function TeacherDashboard() {
             subtext: 'Materi telah diterbitkan',
             icon: BookOpen, 
             color: 'text-emerald-600', 
-            bg: 'bg-emerald-50' 
+            bg: 'bg-emerald-50',
+            onClick: () => navigate('/teacher/materials')
           },
           { 
-            title: 'Kuis & Ujian Aktif', 
+            title: 'Tugas Anak Terkumpul', 
+            value: teacherSubmissions.length.toString(), 
+            subtext: ungradedSubmissionsCount > 0 ? `${ungradedSubmissionsCount} belum dinilai` : 'Semua dinilai',
+            icon: FileCheck, 
+            color: 'text-amber-600', 
+            bg: 'bg-amber-50',
+            highlight: ungradedSubmissionsCount > 0,
+            onClick: () => navigate('/teacher/assignments')
+          },
+          { 
+            title: 'Kuis & Ujian CBT', 
             value: myQuizzes.length.toString(), 
             subtext: 'Siap dikerjakan siswa',
             icon: CheckSquare, 
             color: 'text-purple-600', 
-            bg: 'bg-purple-50' 
+            bg: 'bg-purple-50',
+            onClick: () => navigate('/teacher/quizzes')
           },
         ].map((stat, i) => (
-          <Card key={i} className="hover:shadow-sm transition-shadow">
-            <CardContent className="p-5 flex items-center gap-4">
-              <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${stat.bg} ${stat.color}`}>
-                <stat.icon className="w-6 h-6" />
+          <Card 
+            key={i} 
+            onClick={stat.onClick}
+            className={`transition-all ${stat.onClick ? 'cursor-pointer hover:shadow-md hover:border-indigo-200' : 'hover:shadow-sm'} ${stat.highlight ? 'border-amber-300 ring-2 ring-amber-200/50' : ''}`}
+          >
+            <CardContent className="p-4 flex items-center gap-3.5">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${stat.bg} ${stat.color}`}>
+                <stat.icon className="w-5 h-5" />
               </div>
-              <div>
-                <p className="text-xs font-semibold text-slate-500">{stat.title}</p>
-                <p className="text-2xl font-bold text-slate-900 mt-0.5">{stat.value}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">{stat.subtext}</p>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-slate-500 truncate">{stat.title}</p>
+                <p className="text-xl font-bold text-slate-900 mt-0.5">{stat.value}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5 truncate">{stat.subtext}</p>
               </div>
             </CardContent>
           </Card>
@@ -310,8 +392,9 @@ export default function TeacherDashboard() {
             {filteredAssignedClasses.map((classId) => {
               const grade = getGradeFromClass(classId);
               const classStudents = users.filter(u => u.role === 'STUDENT' && u.classId === classId);
-              const classMaterials = materials.filter(m => isItemForClass(m.classId, m.targetClasses, classId) && m.teacherId === user?.id);
+              const classMaterials = materials.filter(m => isItemForClass(m.classId, m.targetClasses, classId) && (m.teacherId === user?.id || (m as any).teacherNik === user?.nik || (m as any).teacherUsername === user?.username || m.subjectId === user?.subject));
               const classQuizzes = quizzes.filter(q => isItemForClass(q.classId, q.targetClasses, classId));
+              const classSubmissions = assignments.filter(a => classStudents.some(s => s.id === a.studentId || (s.nisn && s.nisn === a.studentId)));
 
               // Grade badge color themes
               const gradeStyles = grade === 7 
@@ -365,43 +448,54 @@ export default function TeacherDashboard() {
                     </div>
 
                     {/* Quick Access Actions for This Class */}
-                    <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="space-y-2 pt-1">
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => navigate('/teacher/materials')}
-                        className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
+                        onClick={() => navigate(`/teacher/assignments?classId=${classId}`)}
+                        className="w-full text-xs gap-1.5 h-8 bg-amber-50/80 border-amber-200 text-amber-900 hover:bg-amber-100 hover:text-amber-950 font-semibold cursor-pointer"
                       >
-                        <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-                        Materi
+                        <FileCheck className="w-3.5 h-3.5 text-amber-600" />
+                        Tugas Anak Terkumpul ({classSubmissions.length})
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate('/teacher/quizzes')}
-                        className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
-                      >
-                        <CheckSquare className="w-3.5 h-3.5 text-purple-600" />
-                        Kuis CBT
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate('/teacher/attendance')}
-                        className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
-                      >
-                        <CalendarCheck2 className="w-3.5 h-3.5 text-emerald-600" />
-                        Presensi
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate('/teacher/grades')}
-                        className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
-                      >
-                        <Award className="w-3.5 h-3.5 text-amber-600" />
-                        Nilai
-                      </Button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate('/teacher/materials')}
+                          className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
+                        >
+                          <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                          Materi
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate('/teacher/quizzes')}
+                          className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
+                        >
+                          <CheckSquare className="w-3.5 h-3.5 text-purple-600" />
+                          Kuis CBT
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate('/teacher/attendance')}
+                          className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
+                        >
+                          <CalendarCheck2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Presensi
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate('/teacher/grades')}
+                          className="text-xs gap-1.5 h-8 border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-200"
+                        >
+                          <Award className="w-3.5 h-3.5 text-amber-600" />
+                          Nilai
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

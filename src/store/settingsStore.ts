@@ -11,9 +11,9 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      appName: 'SmartLMS',
+      appName: 'rafx2 LMS',
       appLogo: '',
-      themeColor: 'indigo',
+      themeColor: 'cyan',
       setSettings: (settings) => set((state) => ({ ...state, ...settings })),
     }),
     {

@@ -35,6 +35,9 @@ export interface Material {
   targetClasses?: string[]; // Daftar kelas yang ditugaskan (multi-class)
   subjectId: string;
   teacherId: string;
+  teacherName?: string; // Nama guru pengampu
+  teacherNik?: string; // NIK guru
+  teacherUsername?: string; // Username guru
   title: string;
   content: string; // Rich text / markdown
   type: 'PDF' | 'VIDEO' | 'LINK' | 'HTML';
@@ -52,12 +55,29 @@ export interface Material {
 }
 
 export interface AssignmentSubmission {
+  id?: string;
   studentId: string;
+  studentName?: string; // Nama lengkap siswa
+  studentNisn?: string; // NISN siswa
+  studentClass?: string; // Kelas siswa (e.g. "7A", "9B")
   materialId: string;
+  materialTitle?: string; // Judul materi / penugasan
+  subject?: string; // Mata pelajaran
   link: string;
   fileName?: string;
   fileSize?: number;
   submittedAt: string;
+  grade?: number;
+  feedback?: string;
+  gradedAt?: string;
+}
+
+export interface OfflineQueueItem {
+  id: string;
+  type: 'ADD_MATERIAL' | 'UPDATE_MATERIAL' | 'DELETE_MATERIAL' | 'SUBMIT_ASSIGNMENT' | 'GRADE_ASSIGNMENT' | 'SUBMIT_QUIZ';
+  payload: any;
+  createdAt: string;
+  retries: number;
 }
 
 export interface Quiz {
@@ -75,14 +95,20 @@ export interface Quiz {
   isScheduled?: boolean; // Indikator apakah kuis dijadwalkan
 }
 
+export type QuestionType = 'SINGLE' | 'MCMA' | 'ESSAY';
+
 export interface Question {
   id: string;
   text: string;
-  options: string[];
-  correctOptionIndex: number;
+  type?: QuestionType; // 'SINGLE' (default), 'MCMA' (multiple correct answers), 'ESSAY' (uraian)
+  options?: string[]; // Pilihan A, B, C, D, E (untuk SINGLE & MCMA)
+  optionImages?: string[]; // Link URL / Gambar untuk setiap opsi [A, B, C, D, E]
+  correctOptionIndex?: number; // Kunci jawaban untuk SINGLE (0, 1, 2, ...)
+  correctOptionIndices?: number[]; // Kunci jawaban untuk MCMA (e.g. [0, 2])
+  sampleAnswer?: string; // Pedoman / Kunci / Rubrik Jawaban untuk ESSAY
   points: number;
   explanation?: string;
-  imageUrl?: string; // Link media gambar
+  imageUrl?: string; // Link media gambar soal
   videoUrl?: string; // Link media video (YouTube / MP4)
   audioUrl?: string; // Link media audio (MP3 / WAV)
 }
@@ -101,10 +127,16 @@ export interface ViolationLog {
 export interface QuizResult {
   id: string;
   quizId: string;
+  quizTitle?: string;
+  subject?: string;
   studentId: string;
+  studentName?: string;
+  studentNisn?: string;
+  studentClass?: string;
   score: number;
-  finalScore?: number; // Score after penalties
-  answers: Record<string, number>; // questionId -> optionIndex
+  finalScore?: number; // Score after penalties and essay grading
+  answers: Record<string, any>; // questionId -> number (SINGLE) | number[] (MCMA) | string (ESSAY)
+  essayScores?: Record<string, number>; // questionId -> nilai manual yang diberikan guru untuk soal essai
   submittedAt: string;
   violationsCount?: number;
   violationLogs?: ViolationLog[];

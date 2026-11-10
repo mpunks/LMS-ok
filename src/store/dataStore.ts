@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useGasStore } from './gasStore';
+import { useAuthStore } from './authStore';
+import { isResultMatchStudent } from '../lib/utils';
 import { 
   User, 
   Material, 
@@ -10,7 +12,8 @@ import {
   DatabaseCleanSummary,
   PromotionOptions,
   PromotionSummary,
-  DeduplicationSummary
+  DeduplicationSummary,
+  OfflineQueueItem
 } from '../types';
 
 interface DataState {
@@ -21,6 +24,10 @@ interface DataState {
   assignments?: any[];
   deletedUserKeys?: string[];
   customPasswords?: Record<string, string>;
+  resetQuizKeys?: string[];
+  offlineQueue?: OfflineQueueItem[];
+  enqueueOfflineAction: (type: OfflineQueueItem['type'], payload: any) => void;
+  processOfflineQueue: () => Promise<void>;
   
   // Users (Admin, Teacher, Student)
   addUser: (user: User) => Promise<void>;
@@ -48,14 +55,20 @@ interface DataState {
   submitQuiz: (result: QuizResult) => Promise<void>;
   updateQuizResult: (id: string, data: Partial<QuizResult>) => Promise<void>;
   deleteQuizResult: (id: string) => Promise<void>;
+  resetStudentQuiz: (quizId: string, studentId: string, studentNisn?: string, studentName?: string, resultId?: string) => Promise<boolean>;
+  resetBulkStudentQuiz: (quizId: string, options: { filterType: 'below_threshold' | 'disqualified' | 'all' | 'selected'; threshold?: number; studentIds?: string[] }) => Promise<{ count: number; studentNames: string[] }>;
   syncQuizToGas: (quizId: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   syncAllToGas: () => Promise<{ success: boolean; message?: string; error?: string }>;
   pullAllFromGas: () => Promise<boolean>;
   pullUsersFromGas: () => Promise<boolean>;
-  pullAllFromServer: () => Promise<boolean>;
+  pullAllFromServer: (forceGasSync?: boolean) => Promise<boolean>;
 
   // Assignments
   submitAssignment: (studentId: string, materialId: string, link: string, fileName?: string, fileSize?: number) => Promise<void>;
+  gradeAssignment: (studentId: string, materialId: string, grade: number, feedback?: string) => Promise<void>;
+
+  activeEditingQuizId?: string | null;
+  setActiveEditingQuizId: (id: string | null) => void;
 
   // Super Admin Database Maintenance
   clearDatabase: (options: DatabaseCleanOptions) => Promise<DatabaseCleanSummary>;
@@ -66,9 +79,15 @@ export const getUserPrimaryKeys = (u: any): string[] => {
   if (!u) return [];
   const keys: string[] = [];
   if (u.id) keys.push(String(u.id).trim());
-  if (u.nisn && String(u.nisn).trim()) keys.push(String(u.nisn).trim());
+  if (u.nisn && String(u.nisn).trim()) {
+    const raw = String(u.nisn).trim();
+    keys.push(raw);
+    const noZero = raw.replace(/^0+/, '');
+    if (noZero && noZero !== raw) keys.push(noZero);
+  }
   if (u.nik && String(u.nik).trim()) keys.push(String(u.nik).trim());
   if (u.username && String(u.username).trim()) keys.push(String(u.username).trim().toLowerCase());
+  if (u.name && String(u.name).trim()) keys.push(String(u.name).trim().toLowerCase());
   return keys;
 };
 
@@ -95,7 +114,7 @@ export const findExistingUserMatch = (list: User[], candidate: any): User | unde
   return undefined;
 };
 
-const syncToServer = async (payload: { users?: User[]; materials?: Material[]; quizzes?: Quiz[]; quizResults?: QuizResult[]; assignments?: any[] }) => {
+const syncToServer = async (payload: { users?: User[]; materials?: Material[]; quizzes?: Quiz[]; quizResults?: QuizResult[]; assignments?: any[]; customPasswords?: Record<string, string>; deletedUserKeys?: string[] }) => {
   try {
     await fetch('/api/data', {
       method: 'POST',
@@ -110,7 +129,11 @@ const syncToServer = async (payload: { users?: User[]; materials?: Material[]; q
 
 const syncToGas = async (action: string, payload: any) => {
   const gasStore = useGasStore.getState();
-  if (gasStore.isConnected && gasStore.webhookUrl) {
+  let url = gasStore.webhookUrl?.trim();
+  if (!url) {
+    url = await gasStore.fetchServerConfig();
+  }
+  if (url && url.includes('script.google.com/macros/s/')) {
     try {
       const res = await gasStore.executeAction(action, payload);
       if (!res?.success) {
@@ -137,6 +160,64 @@ export const useDataStore = create<DataState>()(
       assignments: [] as any[],
       deletedUserKeys: [] as string[],
       customPasswords: {} as Record<string, string>,
+      offlineQueue: [] as OfflineQueueItem[],
+      activeEditingQuizId: null as string | null,
+
+      setActiveEditingQuizId: (id: string | null) => set({ activeEditingQuizId: id }),
+
+      enqueueOfflineAction: (type, payload) => {
+        const item: OfflineQueueItem = {
+          id: `queue-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          type,
+          payload,
+          createdAt: new Date().toISOString(),
+          retries: 0
+        };
+        set(state => ({
+          offlineQueue: [...(state.offlineQueue || []).filter(q => !(q.type === type && JSON.stringify(q.payload) === JSON.stringify(payload))), item]
+        }));
+      },
+
+      processOfflineQueue: async () => {
+        const queue = get().offlineQueue || [];
+        if (queue.length === 0 || !navigator.onLine) return;
+
+        const remainingQueue: OfflineQueueItem[] = [];
+        for (const item of queue) {
+          try {
+            if (item.type === 'SUBMIT_QUIZ') {
+              const res = await fetch('/api/quizzes/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(item.payload.result || item.payload)
+              });
+              if (!res.ok) throw new Error('Server submit quiz error');
+              await syncToGas('submitQuiz', item.payload);
+            } else if (item.type === 'SUBMIT_ASSIGNMENT') {
+              const res = await fetch('/api/assignments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(item.payload)
+              });
+              if (!res.ok) throw new Error('Server submit assignment error');
+              await syncToGas('submitAssignment', item.payload);
+            } else if (item.type === 'GRADE_ASSIGNMENT') {
+              const res = await fetch('/api/assignments/grade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(item.payload)
+              });
+              if (!res.ok) throw new Error('Server grade assignment error');
+              await syncToGas('gradeAssignment', item.payload);
+            }
+          } catch (e) {
+            if (item.retries < 5) {
+              remainingQueue.push({ ...item, retries: item.retries + 1 });
+            }
+          }
+        }
+        set({ offlineQueue: remainingQueue });
+      },
 
       // Actions
       addUser: async (user) => {
@@ -328,7 +409,8 @@ export const useDataStore = create<DataState>()(
         
         // 2. Sync to server /api/data and /api/users/change-password
         const updatedUsers = get().users;
-        syncToServer({ users: updatedUsers });
+        const currentCustomPasswords = get().customPasswords;
+        syncToServer({ users: updatedUsers, customPasswords: currentCustomPasswords });
         
         try {
           await fetch('/api/users/change-password', {
@@ -339,6 +421,7 @@ export const useDataStore = create<DataState>()(
               nisn: user?.nisn,
               nik: user?.nik,
               username: user?.username,
+              name: user?.name,
               newPassword: cleanPass
             })
           });
@@ -350,6 +433,7 @@ export const useDataStore = create<DataState>()(
           nisn: user?.nisn,
           nik: user?.nik,
           username: user?.username,
+          name: user?.name,
           password: cleanPass
         });
         
@@ -359,6 +443,7 @@ export const useDataStore = create<DataState>()(
           nisn: user?.nisn,
           nik: user?.nik,
           username: user?.username,
+          name: user?.name,
           data: { password: cleanPass },
           password: cleanPass
         }).catch(() => {});
@@ -532,17 +617,57 @@ export const useDataStore = create<DataState>()(
       },
 
       addMaterial: async (material: Material) => {
-        set(state => ({ materials: [...state.materials, material] }));
-        syncToServer({ materials: useDataStore.getState().materials });
+        set(state => {
+          const exists = state.materials.some(m => m.id === material.id);
+          if (exists) {
+            return { materials: state.materials.map(m => m.id === material.id ? material : m) };
+          }
+          return { materials: [...state.materials, material] };
+        });
+
+        // Direct persistent endpoint
+        try {
+          await fetch('/api/materials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ material })
+          });
+        } catch (e) {}
+
+        await syncToServer({ materials: useDataStore.getState().materials });
         await syncToGas('addMaterial', { material });
       },
       updateMaterial: async (id: string, data: Partial<Material>) => {
-        set(state => ({ materials: state.materials.map(m => m.id === id ? { ...m, ...data } : m) }));
-        syncToServer({ materials: useDataStore.getState().materials });
+        let updatedMat: Material | undefined;
+        set(state => {
+          const updatedList = state.materials.map(m => {
+            if (m.id === id) {
+              updatedMat = { ...m, ...data };
+              return updatedMat;
+            }
+            return m;
+          });
+          return { materials: updatedList };
+        });
+
+        if (updatedMat) {
+          try {
+            await fetch('/api/materials', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ material: updatedMat })
+            });
+          } catch (e) {}
+        }
+
+        await syncToServer({ materials: useDataStore.getState().materials });
         await syncToGas('updateMaterial', { id, data });
       },
       deleteMaterial: async (id: string) => {
         set(state => ({ materials: state.materials.filter(m => m.id !== id) }));
+        try {
+          await fetch(`/api/materials/${id}`, { method: 'DELETE' });
+        } catch (e) {}
         syncToServer({ materials: useDataStore.getState().materials });
         await syncToGas('deleteMaterial', { id });
       },
@@ -552,6 +677,13 @@ export const useDataStore = create<DataState>()(
 
       addQuiz: async (quiz: Quiz) => {
         set(state => ({ quizzes: [...state.quizzes, quiz] }));
+        try {
+          await fetch('/api/quizzes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quiz })
+          });
+        } catch (e) {}
         syncToServer({ quizzes: useDataStore.getState().quizzes });
         await syncToGas('addQuiz', { quiz });
       },
@@ -567,13 +699,28 @@ export const useDataStore = create<DataState>()(
           });
           return { quizzes: updatedQuizzes };
         });
-        syncToServer({ quizzes: useDataStore.getState().quizzes });
+        if (fullUpdatedQuiz) {
+          try {
+            await fetch(`/api/quizzes/${id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ data, quiz: fullUpdatedQuiz })
+            });
+          } catch (e) {}
+        }
+        syncToServer({ 
+          quizzes: useDataStore.getState().quizzes,
+          quizResults: useDataStore.getState().quizResults 
+        });
         if (fullUpdatedQuiz) {
           await syncToGas('updateQuiz', { id, data, quiz: fullUpdatedQuiz });
         }
       },
       deleteQuiz: async (id: string) => {
         set(state => ({ quizzes: state.quizzes.filter(q => q.id !== id) }));
+        try {
+          await fetch(`/api/quizzes/${id}`, { method: 'DELETE' });
+        } catch (e) {}
         syncToServer({ quizzes: useDataStore.getState().quizzes });
         await syncToGas('deleteQuiz', { id });
       },
@@ -584,8 +731,8 @@ export const useDataStore = create<DataState>()(
         return res;
       },
       syncAllToGas: async () => {
-        const { users, quizzes, materials } = get();
-        const res = await syncToGas('syncAllData', { users, quizzes, materials });
+        const { users, quizzes, materials, quizResults, assignments } = get();
+        const res = await syncToGas('syncAllData', { users, quizzes, materials, quizResults, assignments });
         return res;
       },
       pullAllFromGas: async () => {
@@ -646,16 +793,139 @@ export const useDataStore = create<DataState>()(
               userMap.set('id:sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
             }
 
-            const cleanGasQuizzes = (Array.isArray(res.quizzes) ? res.quizzes : state.quizzes)
+            // Safely merge quizzes so existing rich questions (MCMA, ESSAY, images) are never stripped
+            const quizMap = new Map<string, Quiz>();
+            for (const q of (state.quizzes || [])) {
+              if (q && q.id) quizMap.set(q.id, q);
+            }
+            if (Array.isArray(res.quizzes)) {
+              for (const gq of res.quizzes) {
+                if (gq && gq.id) {
+                  const localQ = quizMap.get(gq.id);
+                  if (state.activeEditingQuizId && gq.id === state.activeEditingQuizId && localQ) {
+                    quizMap.set(gq.id, localQ);
+                    continue;
+                  }
+                  const mergedQuestions = (Array.isArray(gq.questions) && gq.questions.length > 0)
+                    ? gq.questions.map((gqQ: any, idx: number) => {
+                        const lq = (localQ?.questions || []).find((q: any) => q.id === gqQ.id) || (localQ?.questions || [])[idx];
+                        const mergedOpts = (Array.isArray(gqQ.options) && gqQ.options.length > 0) ? gqQ.options : (lq?.options || []);
+                        const mergedOptImgs = (Array.isArray(gqQ.optionImages) && gqQ.optionImages.length > 0) ? gqQ.optionImages : (lq?.optionImages || []);
+                        
+                        let gqCorIndices: number[] = [];
+                        if (Array.isArray(gqQ.correctOptionIndices)) {
+                          gqCorIndices = gqQ.correctOptionIndices.map(Number);
+                        } else if (typeof gqQ.correctOptionIndices === 'string' && gqQ.correctOptionIndices.trim()) {
+                          try {
+                            const p = JSON.parse(gqQ.correctOptionIndices);
+                            if (Array.isArray(p)) gqCorIndices = p.map(Number);
+                          } catch (e) {
+                            const parts = gqQ.correctOptionIndices.replace(/[\[\]]/g, '').split(/[,;\s]+/).filter(Boolean);
+                            gqCorIndices = parts.map((x: string) => {
+                              const u = x.trim().toUpperCase();
+                              if (/^[A-E]$/.test(u)) return u.charCodeAt(0) - 65;
+                              const n = parseInt(x.trim(), 10);
+                              return isNaN(n) ? 0 : n;
+                            });
+                          }
+                        }
+
+                        const mergedCorIndices = gqCorIndices.length > 0
+                          ? gqCorIndices
+                          : (Array.isArray(lq?.correctOptionIndices) && lq.correctOptionIndices.length > 0 ? lq.correctOptionIndices : []);
+
+                        const mergedSampleAns = gqQ.sampleAnswer !== undefined ? gqQ.sampleAnswer : lq?.sampleAnswer;
+                        const hasOptText = Array.isArray(mergedOpts) && mergedOpts.some((o: any) => String(o || '').trim() !== '');
+                        const hasOptImg = Array.isArray(mergedOptImgs) && mergedOptImgs.some((img: any) => String(img || '').trim() !== '');
+
+                        const inferredType =
+                          (mergedSampleAns && String(mergedSampleAns).trim() !== '') || (!hasOptText && !hasOptImg)
+                            ? 'ESSAY'
+                            : (mergedCorIndices.length > 1 || gqQ.type === 'MCMA' || lq?.type === 'MCMA')
+                            ? 'MCMA'
+                            : (gqQ.type || lq?.type || 'SINGLE');
+
+                        return {
+                          ...lq,
+                          ...gqQ,
+                          type: inferredType,
+                          options: inferredType === 'ESSAY' ? [] : mergedOpts,
+                          optionImages: inferredType === 'ESSAY' ? [] : mergedOptImgs,
+                          correctOptionIndex: gqQ.correctOptionIndex !== undefined ? gqQ.correctOptionIndex : (lq?.correctOptionIndex !== undefined ? lq.correctOptionIndex : (mergedCorIndices[0] ?? 0)),
+                          correctOptionIndices: mergedCorIndices,
+                          sampleAnswer: mergedSampleAns,
+                          points: gqQ.points !== undefined ? Number(gqQ.points) : (lq?.points !== undefined ? Number(lq.points) : 10)
+                        };
+                      })
+                    : (localQ?.questions || []);
+
+                  quizMap.set(gq.id, {
+                    ...(localQ || {}),
+                    ...gq,
+                    questions: mergedQuestions
+                  });
+                }
+              }
+            }
+            const cleanGasQuizzes = Array.from(quizMap.values())
               .filter((q: Quiz) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
-            const cleanGasMaterials = Array.isArray(res.materials) ? res.materials : state.materials;
-            const gasAssignments = Array.isArray(res.assignments) && res.assignments.length > 0 ? res.assignments : (state.assignments || []);
+            
+            // Safely merge materials so existing materials are never wiped
+            const matMap = new Map<string, Material>();
+            for (const m of (state.materials || [])) {
+              if (m && m.id) matMap.set(m.id, m);
+            }
+            if (Array.isArray(res.materials)) {
+              for (const gm of res.materials) {
+                if (gm && gm.id) matMap.set(gm.id, gm);
+              }
+            }
+            const cleanGasMaterials = Array.from(matMap.values());
+
+            // Safely merge assignments
+            const asgMap = new Map<string, any>();
+            for (const a of (state.assignments || [])) {
+              if (a && a.studentId && a.materialId) asgMap.set(`${a.studentId}::${a.materialId}`, a);
+            }
+            if (Array.isArray(res.assignments)) {
+              for (const ga of res.assignments) {
+                if (ga && ga.studentId && ga.materialId) {
+                  const key = `${ga.studentId}::${ga.materialId}`;
+                  const existing = asgMap.get(key);
+                  asgMap.set(key, { ...(existing || {}), ...ga });
+                }
+              }
+            }
+            const gasAssignments = Array.from(asgMap.values());
+
+            // Safely merge quizResults from GAS so student scores and essayScores are preserved
+            const qrMap = new Map<string, QuizResult>();
+            for (const qr of (state.quizResults || [])) {
+              if (qr) {
+                const k = qr.id || `${qr.quizId}::${qr.studentId || qr.studentNisn}`;
+                qrMap.set(k, qr);
+              }
+            }
+            if (Array.isArray(res.quizResults)) {
+              for (const gqr of res.quizResults) {
+                if (gqr) {
+                  const k = gqr.id || `${gqr.quizId}::${gqr.studentId || gqr.studentNisn}`;
+                  const existing = qrMap.get(k);
+                  qrMap.set(k, { 
+                    ...(existing || {}), 
+                    ...gqr,
+                    essayScores: gqr.essayScores || existing?.essayScores || {}
+                  });
+                }
+              }
+            }
+            const cleanGasResults = Array.from(qrMap.values());
 
             return {
               users: Array.from(userMap.values()),
               quizzes: cleanGasQuizzes,
               materials: cleanGasMaterials,
-              quizResults: state.quizResults,
+              quizResults: cleanGasResults,
               assignments: gasAssignments
             };
           });
@@ -723,12 +993,35 @@ export const useDataStore = create<DataState>()(
         }
         return false;
       },
-      pullAllFromServer: async () => {
+      pullAllFromServer: async (forceGasSync = false) => {
         try {
-          const res = await fetch('/api/data');
+          const currentWebhookUrl = useGasStore.getState().webhookUrl || '';
+          const url = forceGasSync 
+            ? `/api/sync/realtime?t=${Date.now()}` 
+            : `/api/data?t=${Date.now()}&webhookUrl=${encodeURIComponent(currentWebhookUrl)}`;
+
+          const res = await fetch(url, {
+            method: forceGasSync ? 'POST' : 'GET',
+            cache: 'no-store',
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'x-gas-webhook-url': currentWebhookUrl
+            },
+            ...(forceGasSync ? { body: JSON.stringify({ webhookUrl: currentWebhookUrl }) } : {})
+          });
           if (!res.ok) return false;
           const json = await res.json();
           if (json && json.success && json.data) {
+            // Reconcile shared webhookUrl across client and server
+            if (json.webhookUrl && typeof json.webhookUrl === 'string' && json.webhookUrl.trim()) {
+              const localGas = useGasStore.getState().webhookUrl;
+              if (!localGas || localGas !== json.webhookUrl.trim()) {
+                useGasStore.getState().setWebhookUrl(json.webhookUrl.trim());
+              }
+            }
+
             const serverData = json.data;
             set(state => {
               const activeDeletedKeys = Array.from(new Set([
@@ -790,11 +1083,198 @@ export const useDataStore = create<DataState>()(
                 mergedMap.set('id:sa-1', { id: 'sa-1', role: 'SUPER_ADMIN', name: 'Super Administrator', username: 'rafx2' } as User);
               }
 
-              const cleanQuizzes = (Array.isArray(serverData.quizzes) ? serverData.quizzes : state.quizzes)
-                .filter((q: Quiz) => !q.title?.includes('Bangun Datar & Aljabar') && q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1');
-              const cleanMaterials = Array.isArray(serverData.materials) ? serverData.materials : state.materials;
-              const serverResults = Array.isArray(serverData.quizResults) ? serverData.quizResults : state.quizResults;
-              const serverAssignments = Array.isArray(serverData.assignments) ? serverData.assignments : (state.assignments || []);
+              // Server & Google Sheet are authoritative for quizzes and their schedules
+              const localQuizzesMap = new Map<string, Quiz>();
+              for (const q of (state.quizzes || [])) {
+                if (q && q.id) localQuizzesMap.set(q.id, q);
+              }
+
+              const cleanQuizzes: Quiz[] = [];
+              if (Array.isArray(serverData.quizzes)) {
+                for (const sq of serverData.quizzes) {
+                  if (sq && sq.id) {
+                    const localQ = localQuizzesMap.get(sq.id);
+                    if (state.activeEditingQuizId && sq.id === state.activeEditingQuizId && localQ) {
+                      cleanQuizzes.push(localQ);
+                      continue;
+                    }
+                    const isSched = sq.isScheduled === true || String(sq.isScheduled).toUpperCase() === 'TRUE';
+                    cleanQuizzes.push({
+                      ...(localQ || {}),
+                      ...sq,
+                      isScheduled: isSched,
+                      startTime: isSched ? (sq.startTime || '') : '',
+                      endTime: isSched ? (sq.endTime || '') : '',
+                      durationMinutes: Number(sq.durationMinutes) || Number(localQ?.durationMinutes) || 45,
+                      questions: (Array.isArray(sq.questions) && sq.questions.length > 0)
+                        ? sq.questions.map((sqQ: any, idx: number) => {
+                            const lq = (localQ?.questions || []).find((q: any) => q.id === sqQ.id) || (localQ?.questions || [])[idx];
+                            const mergedOpts = (Array.isArray(sqQ.options) && sqQ.options.length > 0) ? sqQ.options : (lq?.options || []);
+                            const mergedOptImgs = (Array.isArray(sqQ.optionImages) && sqQ.optionImages.length > 0) ? sqQ.optionImages : (lq?.optionImages || []);
+                            let sqCorIndices: number[] = [];
+                            if (Array.isArray(sqQ.correctOptionIndices)) {
+                              sqCorIndices = sqQ.correctOptionIndices.map(Number);
+                            } else if (typeof sqQ.correctOptionIndices === 'string' && sqQ.correctOptionIndices.trim()) {
+                              try {
+                                const p = JSON.parse(sqQ.correctOptionIndices);
+                                if (Array.isArray(p)) sqCorIndices = p.map(Number);
+                              } catch (e) {
+                                const parts = sqQ.correctOptionIndices.replace(/[\[\]]/g, '').split(/[,;\s]+/).filter(Boolean);
+                                sqCorIndices = parts.map((x: string) => {
+                                  const u = x.trim().toUpperCase();
+                                  if (/^[A-E]$/.test(u)) return u.charCodeAt(0) - 65;
+                                  const n = parseInt(x.trim(), 10);
+                                  return isNaN(n) ? 0 : n;
+                                });
+                              }
+                            }
+
+                            const mergedCorIndices = sqCorIndices.length > 0
+                              ? sqCorIndices
+                              : (Array.isArray(lq?.correctOptionIndices) && lq.correctOptionIndices.length > 0 ? lq.correctOptionIndices : []);
+
+                            const mergedSampleAns = sqQ.sampleAnswer !== undefined ? sqQ.sampleAnswer : lq?.sampleAnswer;
+                            const hasOptText = Array.isArray(mergedOpts) && mergedOpts.some((o: any) => String(o || '').trim() !== '');
+                            const hasOptImg = Array.isArray(mergedOptImgs) && mergedOptImgs.some((img: any) => String(img || '').trim() !== '');
+
+                            // Inferred type preserves MCMA and ESSAY even if an old client sent SINGLE
+                            const inferredType =
+                              (mergedSampleAns && String(mergedSampleAns).trim() !== '') || (!hasOptText && !hasOptImg)
+                                ? 'ESSAY'
+                                : (mergedCorIndices.length > 1 || sqQ.type === 'MCMA' || lq?.type === 'MCMA')
+                                ? 'MCMA'
+                                : (sqQ.type || lq?.type || 'SINGLE');
+
+                            return {
+                              ...lq,
+                              ...sqQ,
+                              type: inferredType,
+                              options: inferredType === 'ESSAY' ? [] : mergedOpts,
+                              optionImages: inferredType === 'ESSAY' ? [] : mergedOptImgs,
+                              correctOptionIndex: sqQ.correctOptionIndex !== undefined ? sqQ.correctOptionIndex : (lq?.correctOptionIndex !== undefined ? lq.correctOptionIndex : (mergedCorIndices[0] ?? 0)),
+                              correctOptionIndices: mergedCorIndices,
+                              sampleAnswer: mergedSampleAns,
+                              points: sqQ.points !== undefined ? Number(sqQ.points) : (lq?.points !== undefined ? Number(lq.points) : 10)
+                            };
+                          })
+                        : ((Array.isArray(localQ?.questions) && localQ.questions.length > 0) ? localQ.questions : (sq.questions || []))
+                    });
+                  }
+                }
+              }
+              
+              // Safely merge materials so existing materials are never wiped
+              const matMap = new Map<string, Material>();
+              for (const m of (state.materials || [])) {
+                if (m && m.id) matMap.set(m.id, m);
+              }
+              if (Array.isArray(serverData.materials)) {
+                for (const sm of serverData.materials) {
+                  if (sm && sm.id) matMap.set(sm.id, sm);
+                }
+              }
+              const cleanMaterials = Array.from(matMap.values());
+
+              // Authoritative quizResults from server
+              let serverResults = state.quizResults || [];
+              if (Array.isArray(serverData.quizResults)) {
+                const resetKeys = new Set<string>(
+                  Array.isArray(json.resetQuizKeys) ? json.resetQuizKeys : (state.resetQuizKeys || [])
+                );
+                const qrMap = new Map<string, QuizResult>();
+                for (const sqr of serverData.quizResults) {
+                  if (sqr && sqr.quizId) {
+                    const sKey = sqr.studentId || sqr.studentNisn || sqr.studentName?.toLowerCase() || sqr.id || '';
+                    const compKey = `${sqr.quizId}::${sKey}`;
+                    const compKeyLower = `${sqr.quizId}::${sKey.toLowerCase()}`;
+                    const compKeyNoZero = `${sqr.quizId}::${sKey.replace(/^0+/, '')}`;
+
+                    if (
+                      resetKeys.has(compKey) ||
+                      resetKeys.has(compKeyLower) ||
+                      resetKeys.has(compKeyNoZero) ||
+                      (sqr.id && resetKeys.has(`${sqr.quizId}::${sqr.id}`)) ||
+                      (sqr.studentId && (
+                        resetKeys.has(`${sqr.quizId}::${sqr.studentId}`) ||
+                        resetKeys.has(`${sqr.quizId}::${sqr.studentId.toLowerCase()}`) ||
+                        resetKeys.has(`${sqr.quizId}::${sqr.studentId.replace(/^0+/, '')}`)
+                      )) ||
+                      (sqr.studentNisn && (
+                        resetKeys.has(`${sqr.quizId}::${sqr.studentNisn}`) ||
+                        resetKeys.has(`${sqr.quizId}::${sqr.studentNisn.replace(/^0+/, '')}`)
+                      )) ||
+                      (sqr.studentName && resetKeys.has(`${sqr.quizId}::${sqr.studentName.toLowerCase()}`))
+                    ) {
+                      continue;
+                    }
+                    qrMap.set(`${sqr.quizId}::${sKey}`, sqr);
+                  }
+                }
+
+                // Preserve local results ONLY if they are genuinely pending in offline queue
+                const offlinePendingKeys = new Set(
+                  (state.offlineQueue || [])
+                    .filter(item => item.type === 'SUBMIT_QUIZ')
+                    .map(item => `${item.payload?.quizId}::${item.payload?.studentId}`)
+                );
+                for (const lqr of (state.quizResults || [])) {
+                  if (lqr && lqr.quizId) {
+                    const offlineKey = `${lqr.quizId}::${lqr.studentId}`;
+                    if (offlinePendingKeys.has(offlineKey)) {
+                      const sKey = `${lqr.quizId}::${lqr.studentId || lqr.id}`;
+                      if (!qrMap.has(sKey)) {
+                        qrMap.set(sKey, lqr);
+                      }
+                    }
+                  }
+                }
+
+                serverResults = Array.from(qrMap.values());
+              }
+
+              // Cleanup student local storage if any quiz was reset
+              try {
+                const curUser = useAuthStore.getState().user;
+                if (curUser && curUser.role === 'STUDENT') {
+                  const studentKeysToClean = [
+                    curUser.id,
+                    curUser.nisn,
+                    curUser.nisn ? curUser.nisn.replace(/^0+/, '') : '',
+                    curUser.username,
+                    'guest'
+                  ].filter(Boolean) as string[];
+
+                  for (const q of cleanQuizzes) {
+                    const hasResult = serverResults.some(r => 
+                      r.quizId === q.id && isResultMatchStudent(r, curUser)
+                    );
+                    if (!hasResult) {
+                      for (const sk of studentKeysToClean) {
+                        localStorage.removeItem(`cbt_finished_${sk}_${q.id}`);
+                        localStorage.removeItem(`cbt_session_${sk}_${q.id}`);
+                        localStorage.removeItem(`cbt_result_${sk}_${q.id}`);
+                        localStorage.removeItem(`cbt_answers_${sk}_${q.id}`);
+                      }
+                    }
+                  }
+                }
+              } catch (e) {}
+              
+              // Safely merge assignments
+              const asgMap = new Map<string, any>();
+              for (const a of (state.assignments || [])) {
+                if (a && a.studentId && a.materialId) asgMap.set(`${a.studentId}::${a.materialId}`, a);
+              }
+              if (Array.isArray(serverData.assignments)) {
+                for (const sa of serverData.assignments) {
+                  if (sa && sa.studentId && sa.materialId) {
+                    const key = `${sa.studentId}::${sa.materialId}`;
+                    const existing = asgMap.get(key);
+                    asgMap.set(key, { ...(existing || {}), ...sa });
+                  }
+                }
+              }
+              const serverAssignments = Array.from(asgMap.values());
 
               return {
                 users: Array.from(mergedMap.values()),
@@ -803,7 +1283,8 @@ export const useDataStore = create<DataState>()(
                 quizResults: serverResults,
                 assignments: serverAssignments,
                 deletedUserKeys: activeDeletedKeys,
-                customPasswords: activeCustomPasswords
+                customPasswords: activeCustomPasswords,
+                resetQuizKeys: Array.isArray(json.resetQuizKeys) ? json.resetQuizKeys : (state.resetQuizKeys || [])
               };
             });
             return true;
@@ -814,28 +1295,356 @@ export const useDataStore = create<DataState>()(
         return false;
       },
       submitQuiz: async (result: QuizResult) => {
+        const activeUsers = get().users || [];
+        const activeQuizzes = get().quizzes || [];
+        const student = activeUsers.find(u => 
+          u.id === result.studentId || 
+          (u.nisn && u.nisn === result.studentId) || 
+          (result.studentNisn && u.nisn === result.studentNisn) ||
+          (result.studentName && u.name && u.name.toLowerCase() === result.studentName.toLowerCase())
+        );
+        const quiz = activeQuizzes.find(q => q.id === result.quizId);
+
+        const enriched: QuizResult = {
+          ...result,
+          studentName: result.studentName || student?.name || 'Siswa',
+          studentNisn: result.studentNisn || student?.nisn || '',
+          studentClass: result.studentClass || student?.classId || '',
+          quizTitle: result.quizTitle || quiz?.title || 'Kuis CBT',
+          subject: result.subject || quiz?.subjectId || ''
+        };
+
+        const studentCleanKeys = [
+          enriched.studentId,
+          enriched.studentNisn,
+          student?.id,
+          student?.nisn,
+          enriched.studentName?.toLowerCase()
+        ].filter(Boolean) as string[];
+
+        // 1. Immediately store in Zustand client state so student sees completed score and reset is cleared
         set(state => ({ 
+          resetQuizKeys: (state.resetQuizKeys || []).filter(k => {
+            return !studentCleanKeys.some(sk => 
+              k === `${enriched.quizId}::${sk}` || 
+              k === `${enriched.quizId}::${sk.toLowerCase()}` || 
+              k === `${enriched.quizId}::${sk.replace(/^0+/, '')}`
+            );
+          }),
           quizResults: [
-            ...state.quizResults.filter(r => !(r.quizId === result.quizId && r.studentId === result.studentId)), 
-            result
+            ...state.quizResults.filter(r => !(r.quizId === enriched.quizId && (
+              r.studentId === enriched.studentId ||
+              (enriched.studentNisn && (r.studentId === enriched.studentNisn || r.studentNisn === enriched.studentNisn)) ||
+              (enriched.id && r.id === enriched.id)
+            ))), 
+            enriched
           ] 
         }));
-        syncToServer({ quizResults: useDataStore.getState().quizResults });
-        await syncToGas('submitQuiz', { result });
+
+        // Dedicated local storage backup
+        try {
+          if (enriched.studentId && enriched.quizId) {
+            localStorage.setItem(`cbt_result_${enriched.studentId}_${enriched.quizId}`, JSON.stringify(enriched));
+          }
+          if (enriched.studentNisn && enriched.quizId) {
+            localStorage.setItem(`cbt_result_${enriched.studentNisn}_${enriched.quizId}`, JSON.stringify(enriched));
+          }
+        } catch (e) {}
+
+        const activeWebhook = useGasStore.getState().webhookUrl || '';
+
+        // 2. Dedicated endpoint /api/quizzes/submit (Awaited for persistent server & immediate GAS forward)
+        let serverSaved = false;
+        let gasSynced = false;
+        try {
+          const res = await fetch('/api/quizzes/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...enriched,
+              webhookUrl: activeWebhook
+            })
+          });
+          if (res.ok) {
+            serverSaved = true;
+            const data = await res.json();
+            if (data?.gasSynced) gasSynced = true;
+            if (data?.result) {
+              set(state => ({
+                resetQuizKeys: Array.isArray(data.resetQuizKeys) ? data.resetQuizKeys : state.resetQuizKeys,
+                quizResults: [
+                  ...state.quizResults.filter(r => r.id !== enriched.id && !(r.quizId === enriched.quizId && (r.studentId === enriched.studentId || r.studentNisn === enriched.studentNisn))),
+                  data.result
+                ]
+              }));
+            }
+          }
+        } catch (serverErr) {
+          console.warn('Dedicated quiz submit to server notice:', serverErr);
+        }
+
+        // 3. Fallback to offlineQueue if network failed or server submit failed
+        if (!navigator.onLine || !serverSaved) {
+          get().enqueueOfflineAction('SUBMIT_QUIZ', { result: enriched });
+        }
+
+        // 4. CRITICAL: Dual-Channel Guarantee - If server did not sync to Google Sheets, sync directly from client
+        if (!gasSynced) {
+          try {
+            await syncToGas('submitQuiz', { result: enriched });
+          } catch (gasErr) {
+            console.warn('Direct GAS sync fallback:', gasErr);
+          }
+        }
       },
       updateQuizResult: async (id: string, data: Partial<QuizResult>) => {
         set(state => ({
           quizResults: state.quizResults.map(r => r.id === id ? { ...r, ...data } : r)
         }));
+        try {
+          await fetch('/api/quizzes/result/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, data })
+          });
+        } catch (e) {}
         syncToServer({ quizResults: useDataStore.getState().quizResults });
         await syncToGas('updateQuizResult', { id, data });
       },
       deleteQuizResult: async (id: string) => {
+        const target = (get().quizResults || []).find((r: QuizResult) => r.id === id);
         set(state => ({
-          quizResults: state.quizResults.filter(r => r.id !== id)
+          quizResults: (state.quizResults || []).filter((r: QuizResult) => r.id !== id)
         }));
-        syncToServer({ quizResults: useDataStore.getState().quizResults });
-        await syncToGas('deleteQuizResult', { id });
+        try {
+          await fetch('/api/quizzes/reset-student', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              resultId: id,
+              quizId: target?.quizId,
+              studentId: target?.studentId,
+              studentNisn: target?.studentNisn,
+              studentName: target?.studentName,
+              webhookUrl: useGasStore.getState().webhookUrl
+            })
+          });
+        } catch (e) {}
+        syncToServer({ quizResults: get().quizResults });
+        await syncToGas('deleteQuizResult', { 
+          id, 
+          quizId: target?.quizId, 
+          studentId: target?.studentId, 
+          studentNisn: target?.studentNisn 
+        });
+      },
+      resetStudentQuiz: async (quizId: string, studentId: string, studentNisn?: string, studentName?: string, resultId?: string): Promise<boolean> => {
+        const activeUsers = get().users || [];
+        const targetUser = activeUsers.find(u => 
+          (studentId && (u.id === studentId || u.nisn === studentId || (u.nisn && u.nisn.replace(/^0+/, '') === studentId.replace(/^0+/, '')))) ||
+          (studentNisn && (u.nisn === studentNisn || (u.nisn && u.nisn.replace(/^0+/, '') === studentNisn.replace(/^0+/, '')))) ||
+          (studentName && u.name && u.name.toLowerCase() === studentName.toLowerCase())
+        );
+
+        const studentKeys = new Set<string>();
+        if (resultId) studentKeys.add(resultId);
+        if (studentId) {
+          studentKeys.add(studentId);
+          studentKeys.add(studentId.toLowerCase());
+          studentKeys.add(studentId.replace(/^0+/, ''));
+        }
+        if (studentNisn) {
+          studentKeys.add(studentNisn);
+          studentKeys.add(studentNisn.replace(/^0+/, ''));
+        }
+        if (studentName) studentKeys.add(studentName.toLowerCase());
+        if (targetUser) {
+          if (targetUser.id) studentKeys.add(targetUser.id);
+          if (targetUser.nisn) {
+            studentKeys.add(targetUser.nisn);
+            studentKeys.add(targetUser.nisn.replace(/^0+/, ''));
+          }
+          if (targetUser.username) studentKeys.add(targetUser.username.toLowerCase());
+          if (targetUser.name) studentKeys.add(targetUser.name.toLowerCase());
+        }
+
+        const target = (get().quizResults || []).find((r: QuizResult) => 
+          r.quizId === quizId && (
+            (resultId && r.id === resultId) ||
+            (r.id && studentKeys.has(r.id)) ||
+            (r.studentId && (studentKeys.has(r.studentId) || studentKeys.has(r.studentId.replace(/^0+/, '')))) ||
+            (r.studentNisn && (studentKeys.has(r.studentNisn) || studentKeys.has(r.studentNisn.replace(/^0+/, '')))) ||
+            (r.studentName && studentKeys.has(r.studentName.toLowerCase())) ||
+            (targetUser && isResultMatchStudent(r, targetUser))
+          )
+        );
+        const targetId = resultId || target?.id;
+
+        const updatedResetKeys = Array.from(new Set([
+          ...(get().resetQuizKeys || []),
+          ...Array.from(studentKeys).map(k => `${quizId}::${k}`)
+        ]));
+
+        set(state => ({
+          resetQuizKeys: updatedResetKeys,
+          quizResults: (state.quizResults || []).filter((r: QuizResult) => {
+            if (r.quizId !== quizId) return true;
+            if (targetId && r.id === targetId) return false;
+            if (r.id && studentKeys.has(r.id)) return false;
+            if (r.studentId && (studentKeys.has(r.studentId) || studentKeys.has(r.studentId.replace(/^0+/, '')))) return false;
+            if (r.studentNisn && (studentKeys.has(r.studentNisn) || studentKeys.has(r.studentNisn.replace(/^0+/, '')))) return false;
+            if (r.studentName && studentKeys.has(r.studentName.toLowerCase())) return false;
+            if (targetUser && isResultMatchStudent(r, targetUser)) return false;
+            return true;
+          })
+        }));
+
+        try {
+          for (const sk of studentKeys) {
+            localStorage.removeItem(`cbt_finished_${sk}_${quizId}`);
+            localStorage.removeItem(`cbt_session_${sk}_${quizId}`);
+            localStorage.removeItem(`cbt_result_${sk}_${quizId}`);
+            localStorage.removeItem(`cbt_answers_${sk}_${quizId}`);
+          }
+        } catch (e) {}
+
+        try {
+          const res = await fetch('/api/quizzes/reset-student', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              quizId,
+              studentId: studentId || target?.studentId || targetUser?.id,
+              studentNisn: studentNisn || target?.studentNisn || targetUser?.nisn,
+              studentName: studentName || target?.studentName || targetUser?.name,
+              resultId: targetId,
+              webhookUrl: useGasStore.getState().webhookUrl
+            })
+          });
+          const json = await res.json().catch(() => ({}));
+          syncToServer({ quizResults: get().quizResults });
+          await syncToGas('deleteQuizResult', {
+            quizId,
+            studentId: studentId || target?.studentId || targetUser?.id,
+            studentNisn: studentNisn || target?.studentNisn || targetUser?.nisn,
+            id: targetId,
+            resultId: targetId
+          });
+          return json?.success !== false;
+        } catch (e) {
+          syncToServer({ quizResults: get().quizResults });
+          return true;
+        }
+      },
+      resetBulkStudentQuiz: async (quizId: string, options: { filterType: 'below_threshold' | 'disqualified' | 'all' | 'selected'; threshold?: number; studentIds?: string[] }) => {
+        const { filterType, threshold = 75, studentIds = [] } = options;
+        const allResults = get().quizResults || [];
+        const activeUsers = get().users || [];
+
+        const matchingResults = allResults.filter(qr => {
+          if (qr.quizId !== quizId) return false;
+          const score = Number(qr.finalScore !== undefined ? qr.finalScore : qr.score || 0);
+          const isDisqualified = Boolean(qr.disqualified) || Number(qr.violationsCount || 0) > 0;
+
+          if (filterType === 'below_threshold') {
+            return score < threshold;
+          } else if (filterType === 'disqualified') {
+            return isDisqualified;
+          } else if (filterType === 'all') {
+            return true;
+          } else if (filterType === 'selected') {
+            return studentIds.some(sid => qr.id === sid || qr.studentId === sid || qr.studentNisn === sid);
+          }
+          return false;
+        });
+
+        if (matchingResults.length === 0) {
+          return { count: 0, studentNames: [] };
+        }
+
+        const resetStudentKeys = new Set<string>();
+        const resetNames: string[] = [];
+
+        for (const r of matchingResults) {
+          if (r.id) resetStudentKeys.add(r.id);
+          if (r.studentId) {
+            resetStudentKeys.add(r.studentId);
+            resetStudentKeys.add(r.studentId.toLowerCase());
+            resetStudentKeys.add(r.studentId.replace(/^0+/, ''));
+          }
+          if (r.studentNisn) {
+            resetStudentKeys.add(r.studentNisn);
+            resetStudentKeys.add(r.studentNisn.replace(/^0+/, ''));
+          }
+          if (r.studentName) {
+            resetStudentKeys.add(r.studentName.toLowerCase());
+            if (!resetNames.includes(r.studentName)) resetNames.push(r.studentName);
+          }
+
+          const u = activeUsers.find(usr => 
+            (r.studentId && (usr.id === r.studentId || usr.nisn === r.studentId)) ||
+            (r.studentNisn && usr.nisn === r.studentNisn) ||
+            (r.studentName && usr.name && usr.name.toLowerCase() === r.studentName.toLowerCase())
+          );
+          if (u) {
+            if (u.id) resetStudentKeys.add(u.id);
+            if (u.nisn) {
+              resetStudentKeys.add(u.nisn);
+              resetStudentKeys.add(u.nisn.replace(/^0+/, ''));
+            }
+            if (u.username) resetStudentKeys.add(u.username.toLowerCase());
+            if (u.name) resetStudentKeys.add(u.name.toLowerCase());
+          }
+        }
+
+        const matchResultIds = new Set(matchingResults.map(r => r.id));
+        const updatedResetKeys = Array.from(new Set([
+          ...(get().resetQuizKeys || []),
+          ...Array.from(resetStudentKeys).map(k => `${quizId}::${k}`)
+        ]));
+
+        // Update local state immediately
+        set(state => ({
+          resetQuizKeys: updatedResetKeys,
+          quizResults: (state.quizResults || []).filter(r => !matchResultIds.has(r.id))
+        }));
+
+        // Clean local CBT storage for all affected students
+        try {
+          for (const sk of resetStudentKeys) {
+            localStorage.removeItem(`cbt_finished_${sk}_${quizId}`);
+            localStorage.removeItem(`cbt_session_${sk}_${quizId}`);
+            localStorage.removeItem(`cbt_result_${sk}_${quizId}`);
+            localStorage.removeItem(`cbt_answers_${sk}_${quizId}`);
+          }
+        } catch (e) {}
+
+        // Call server bulk-reset endpoint
+        try {
+          const res = await fetch('/api/quizzes/bulk-reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              quizId,
+              filterType,
+              threshold,
+              studentIds,
+              webhookUrl: useGasStore.getState().webhookUrl
+            })
+          });
+          const data = await res.json().catch(() => ({}));
+          syncToServer({ quizResults: get().quizResults });
+          return {
+            count: data?.count || matchingResults.length,
+            studentNames: data?.studentNames || resetNames
+          };
+        } catch (e) {
+          syncToServer({ quizResults: get().quizResults });
+          return {
+            count: matchingResults.length,
+            studentNames: resetNames
+          };
+        }
       },
       submitAssignment: async (studentId: string, materialId: string, link: string, fileName?: string, fileSize?: number) => {
         const newRecord = {
@@ -849,15 +1658,60 @@ export const useDataStore = create<DataState>()(
 
         set(state => {
           const currentList = state.assignments || [];
+          const existing = currentList.find(a => a.studentId === studentId && a.materialId === materialId);
           const filtered = currentList.filter(a => !(a.studentId === studentId && a.materialId === materialId));
           return {
-            assignments: [...filtered, newRecord]
+            assignments: [...filtered, {
+              ...newRecord,
+              grade: existing?.grade,
+              feedback: existing?.feedback,
+              gradedAt: existing?.gradedAt
+            }]
           };
         });
+
+        // Save to dedicated server endpoint immediately
+        try {
+          await fetch('/api/assignments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ studentId, materialId, link, fileName, fileSize })
+          });
+        } catch (e) {}
 
         const allAssignments = get().assignments || [];
         syncToServer({ assignments: allAssignments });
         await syncToGas('submitAssignment', { studentId, materialId, link, fileName, fileSize });
+      },
+      gradeAssignment: async (studentId: string, materialId: string, grade: number, feedback?: string) => {
+        const gradedAt = new Date().toISOString();
+        set(state => {
+          const currentList = state.assignments || [];
+          const updated = currentList.map(a => {
+            if (a.studentId === studentId && a.materialId === materialId) {
+              return {
+                ...a,
+                grade,
+                feedback: feedback || '',
+                gradedAt
+              };
+            }
+            return a;
+          });
+          return { assignments: updated };
+        });
+
+        // Save to server
+        try {
+          await fetch('/api/assignments/grade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ studentId, materialId, grade, feedback })
+          });
+        } catch (e) {}
+
+        syncToServer({ assignments: get().assignments });
+        await syncToGas('gradeAssignment', { studentId, materialId, grade, feedback });
       },
       cleanInitialSamples: async () => {
         set(state => {
@@ -875,12 +1729,31 @@ export const useDataStore = create<DataState>()(
             q.id !== 'quiz-cbt-1' && q.id !== 'quiz-1' && q.id !== 'q-1'
           );
           const cleanMaterials = state.materials.filter(m => 
-            m.id !== 'm-1' && m.id !== 'm-demo' && !m.title?.toLowerCase().includes('contoh')
+            m.id !== 'm-1' && m.id !== 'm-demo'
           );
+          const cleanAssignments = (state.assignments || []).filter(a => {
+            const sId = String(a.studentId || '').toLowerCase();
+            const mId = String(a.materialId || '').toLowerCase();
+            const file = String(a.fileName || '').toLowerCase();
+            const link = String(a.link || '').toLowerCase();
+            return sId !== 'student-1' && sId !== 'student-test-1' && !sId.includes('test') &&
+              mId !== 'm-1' && mId !== 'm-demo' && !mId.includes('test') &&
+              !file.includes('test') && !link.includes('test') && !file.includes('contoh');
+          });
+          const cleanQuizResults = (state.quizResults || []).filter(qr => {
+            const sId = String(qr.studentId || '').toLowerCase();
+            const qId = String(qr.quizId || '').toLowerCase();
+            const sName = String(qr.studentName || '').toLowerCase();
+            return sId !== 'student-1' && sId !== 'student-test-1' && !sId.includes('test') &&
+              qId !== 'q-1' && qId !== 'quiz-1' && qId !== 'quiz-cbt-1' && !qId.includes('test') &&
+              !sName.includes('contoh') && !sName.includes('percobaan') && !sName.includes('dummy');
+          });
           return {
             users: cleanUsers,
             quizzes: cleanQuizzes,
-            materials: cleanMaterials
+            materials: cleanMaterials,
+            assignments: cleanAssignments,
+            quizResults: cleanQuizResults
           };
         });
 
@@ -987,6 +1860,14 @@ export const useDataStore = create<DataState>()(
     }),
     {
       name: 'smartlms-data-storage-v2',
+      partialize: (state) => ({
+        // Ensure devices ALWAYS connect to and retrieve the latest authoritative data from server / Google Sheet
+        // Do NOT store stale local quizzes, materials, or results on individual devices
+        customPasswords: state.customPasswords || {},
+        deletedUserKeys: state.deletedUserKeys || [],
+        offlineQueue: state.offlineQueue || [],
+        resetQuizKeys: state.resetQuizKeys || []
+      })
     }
   )
 );

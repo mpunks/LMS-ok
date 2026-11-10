@@ -29,15 +29,53 @@ import { isItemForClass } from '@/lib/utils';
 
 export default function StudentMaterials() {
   const { user } = useAuthStore();
-  const { materials, assignments, markMaterialAsRead, submitAssignment, pullAllFromServer } = useDataStore();
+  const { users, materials, assignments, markMaterialAsRead, submitAssignment, pullAllFromServer } = useDataStore();
 
+  // Resolve current student details from users database
+  const currentStudent = users.find(u => 
+    (user?.id && u.id === user.id) || 
+    (user?.nisn && u.nisn === user.nisn) ||
+    (user?.username && u.username === user.username)
+  ) || user;
+
+  const studentClass = currentStudent?.classId || (currentStudent as any)?.kelas || (currentStudent as any)?.className || user?.classId || (user as any)?.kelas || '';
+
+  // Synchronize classId in authStore if it was missing or updated
+  useEffect(() => {
+    if (currentStudent?.classId && (!user?.classId || user.classId !== currentStudent.classId)) {
+      useAuthStore.getState().updateCurrentUser({ classId: currentStudent.classId });
+    }
+  }, [currentStudent?.classId, user?.classId]);
+
+  // Pull latest data on mount, periodic interval, and on tab focus
   useEffect(() => {
     pullAllFromServer().catch(() => {});
+
+    const interval = setInterval(() => {
+      pullAllFromServer().catch(() => {});
+    }, 15000);
+
+    const handleFocus = () => {
+      pullAllFromServer().catch(() => {});
+    };
+    window.addEventListener('focus', handleFocus);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        pullAllFromServer().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, []);
   
   // Ambil materi khusus kelas siswa ini (mendukung penugasan multi-kelas) dan urutkan
   const studentMaterials = materials
-    .filter(m => isItemForClass(m.classId, m.targetClasses, user?.classId))
+    .filter(m => isItemForClass(m.classId, m.targetClasses, studentClass) || (!studentClass && materials.length > 0))
     .sort((a, b) => a.order - b.order);
 
   // Local state for read status for UI purposes if backend sync takes time

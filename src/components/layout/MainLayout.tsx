@@ -1,6 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Users, BookOpen, CheckSquare, BarChart, Settings, Database, KeyRound, RefreshCw, Smartphone } from 'lucide-react';
+import { 
+  Menu, 
+  X, 
+  LogOut, 
+  LayoutDashboard, 
+  Users, 
+  BookOpen, 
+  CheckSquare, 
+  BarChart, 
+  Settings, 
+  Database, 
+  KeyRound, 
+  RefreshCw, 
+  Smartphone, 
+  FileCheck,
+  Cpu,
+  Terminal,
+  Brain,
+  Code2,
+  Sparkles,
+  ShieldCheck,
+  Binary
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -15,24 +37,25 @@ const adminNav = [
   { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
   { name: 'Kelola Tim Admin', href: '/admin/users', icon: Users },
   { name: 'Guru & Siswa', href: '/admin/students', icon: Users },
-  { name: 'Pengaturan Aplikasi', href: '/admin/settings', icon: Settings },
-  { name: 'Integrasi GAS', href: '/admin/gas', icon: Settings },
-  { name: 'Aplikasi Android', href: '/admin/android', icon: Smartphone },
+  { name: 'Pengaturan rafx2', href: '/admin/settings', icon: Settings },
+  { name: 'Integrasi Database GAS', href: '/admin/gas', icon: Database },
+  { name: 'Aplikasi Mobile (PWA)', href: '/admin/android', icon: Smartphone },
 ];
 
 const teacherNav = [
   { name: 'Dashboard', href: '/teacher', icon: LayoutDashboard },
-  { name: 'Materi Belajar', href: '/teacher/materials', icon: BookOpen },
-  { name: 'Kuis & CBT', href: '/teacher/quizzes', icon: CheckSquare },
-  { name: 'Rekap Nilai', href: '/teacher/grades', icon: BarChart },
-  { name: 'Absensi', href: '/teacher/attendance', icon: Users },
+  { name: 'Materi Informatika', href: '/teacher/materials', icon: Code2 },
+  { name: 'Tugas Masuk', href: '/teacher/assignments', icon: FileCheck },
+  { name: 'Kuis & CBT AI', href: '/teacher/quizzes', icon: CheckSquare },
+  { name: 'Rekap Nilai Siswa', href: '/teacher/grades', icon: BarChart },
+  { name: 'Presensi / Absensi', href: '/teacher/attendance', icon: Users },
 ];
 
 const studentNav = [
   { name: 'Dashboard', href: '/student', icon: LayoutDashboard },
-  { name: 'Materi Belajar', href: '/student/materials', icon: BookOpen },
-  { name: 'Tugas & Kuis', href: '/student/quizzes', icon: CheckSquare },
-  { name: 'Raport Saya', href: '/student/grades', icon: BarChart },
+  { name: 'Materi Informatika', href: '/student/materials', icon: Code2 },
+  { name: 'Tugas & Kuis CBT', href: '/student/quizzes', icon: CheckSquare },
+  { name: 'Evaluasi & Nilai', href: '/student/grades', icon: BarChart },
 ];
 
 export function MainLayout({ children }: { children: React.ReactNode }) {
@@ -42,7 +65,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore();
   const { appName, appLogo } = useSettingsStore();
   const { isConnected, testConnection } = useGasStore();
-  const { pullAllFromServer } = useDataStore();
+  const { pullAllFromServer, assignments = [], users = [], materials = [] } = useDataStore();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -58,60 +81,79 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
     navigate('/');
   };
 
+  // Submissions count for teacher nav badge
+  const assignedClasses = user?.assignedClasses || [];
+  const teacherSubmissions = assignments.filter(a => {
+    const student = users.find(u => u.id === a.studentId || (u.nisn && u.nisn === a.studentId));
+    if (student?.classId && (Array.isArray(assignedClasses) ? assignedClasses.includes(student.classId) : false)) return true;
+    const material = materials.find(m => m.id === a.materialId);
+    if (material && (material.teacherId === user?.id || (material as any).teacherNik === user?.nik || material.subjectId === user?.subject)) return true;
+    return false;
+  });
+  const pendingSubmissionsCount = teacherSubmissions.filter(a => a.grade === undefined || a.grade === null || a.grade === '').length;
+
+  const teacherNavWithBadge = [
+    { name: 'Dashboard', href: '/teacher', icon: LayoutDashboard },
+    { name: 'Materi Informatika', href: '/teacher/materials', icon: Code2 },
+    { 
+      name: 'Tugas Siswa Masuk', 
+      href: '/teacher/assignments', 
+      icon: FileCheck,
+      badge: pendingSubmissionsCount > 0 ? `${pendingSubmissionsCount} Baru` : (teacherSubmissions.length > 0 ? `${teacherSubmissions.length}` : undefined)
+    },
+    { name: 'Kuis & CBT Cerdas', href: '/teacher/quizzes', icon: CheckSquare },
+    { name: 'Rekap Nilai Siswa', href: '/teacher/grades', icon: BarChart },
+    { name: 'Presensi / Absensi', href: '/teacher/attendance', icon: Users },
+  ];
+
   const navItems = 
     user?.role === 'SUPER_ADMIN' 
       ? [
           ...adminNav,
-          { name: 'Bersihkan Database', href: '/admin/database', icon: Database, isDanger: true, badge: 'Super Admin' }
+          { name: 'Reset Database', href: '/admin/database', icon: Database, isDanger: true, badge: 'Super Admin' }
         ]
       : user?.role === 'ADMIN' 
         ? adminNav 
         : user?.role === 'TEACHER' 
-          ? teacherNav 
+          ? teacherNavWithBadge 
           : studentNav;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row overflow-hidden">
-      {/* Header: Completely hidden when menu is hidden so dashboard frame expands fully without top bar obstruction */}
+    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col md:flex-row overflow-hidden cyber-grid selection:bg-cyan-500 selection:text-black">
+      {/* Header: Mobile Top Bar with Logo, User info & Easy Logout */}
       <header 
         id="main-top-header"
-        className={cn(
-          "bg-white border-b border-slate-200 px-4 h-16 sticky top-0 z-30 transition-all",
-          !isSidebarOpen ? "hidden" : "md:hidden flex items-center justify-between"
-        )}
+        className="md:hidden bg-[#0a0f1d]/90 backdrop-blur-md border-b border-cyan-500/20 px-3.5 h-14 sticky top-0 z-30 flex items-center justify-between shadow-lg shrink-0"
       >
-        <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
-          {appLogo ? <img src={appLogo} alt="Logo" className="w-8 h-8 rounded" /> : <BookOpen className="w-6 h-6" />}
-          {appName}
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="p-1.5 -ml-1 text-slate-300 hover:text-cyan-400 rounded-lg hover:bg-slate-800/60 transition-colors"
+            title="Buka Menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <div className="flex items-center gap-2 font-bold text-sm truncate">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-cyan-500 via-indigo-600 to-purple-600 p-0.5 flex items-center justify-center shrink-0">
+              <div className="w-full h-full bg-[#070b14] rounded-[6px] flex items-center justify-center">
+                <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              </div>
+            </div>
+            <span className="font-extrabold text-white tracking-tight glow-text-cyan">rafx2 LMS</span>
+            <span className="text-[10px] font-mono text-cyan-400 px-1.5 py-0.2 rounded bg-cyan-950/60 border border-cyan-500/30">Informatika</span>
+          </div>
         </div>
-        <button
-          onClick={() => setIsSidebarOpen(false)}
-          className="p-2 -mr-2 text-slate-600 hover:text-slate-900 focus:outline-none"
-          title="Tutup Menu"
-        >
-          <X className="w-6 h-6" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold text-rose-300 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/30 transition-colors shadow-2xs cursor-pointer"
+            title="Keluar dari akun"
+          >
+            <LogOut className="w-3.5 h-3.5 text-rose-400" />
+            <span>Keluar</span>
+          </button>
+        </div>
       </header>
-
-      {/* Floating Menu Toggle Button when menu is hidden */}
-      {!isSidebarOpen && (
-        <motion.button
-          id="btn-open-sidebar"
-          initial={{ opacity: 0, scale: 0.85 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.85 }}
-          transition={{ duration: 0.2 }}
-          onClick={() => setIsSidebarOpen(true)}
-          className="fixed top-3 left-3 z-40 p-2.5 rounded-xl bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-md hover:shadow-xl border border-slate-200/90 backdrop-blur-md transition-all hover:scale-105 active:scale-95 group flex items-center gap-2"
-          title="Buka Menu Navigasi"
-          aria-label="Buka Menu Navigasi"
-        >
-          <Menu className="w-5 h-5 text-slate-600 group-hover:text-indigo-600 transition-colors" />
-          <span className="text-xs font-semibold text-slate-700 group-hover:text-indigo-600 pr-1 hidden sm:inline-block transition-all">
-            Menu
-          </span>
-        </motion.button>
-      )}
 
       {/* Mobile Backdrop */}
       <AnimatePresence>
@@ -121,7 +163,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 md:hidden"
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 md:hidden"
           />
         )}
       </AnimatePresence>
@@ -129,45 +171,77 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       {/* Sidebar */}
       <motion.aside
         className={cn(
-          "fixed top-0 left-0 z-50 h-screen w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out",
+          "fixed top-0 left-0 z-50 h-screen w-64 bg-[#0a0f1d] border-r border-cyan-500/20 flex flex-col transition-transform duration-300 ease-in-out shadow-2xl backdrop-blur-xl",
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200">
-          <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
-            {appLogo ? <img src={appLogo} alt="Logo" className="w-8 h-8 rounded" /> : <BookOpen className="w-6 h-6" />}
-            <span>{appName}</span>
+        {/* Brand Header */}
+        <div className="h-16 flex items-center justify-between px-5 border-b border-slate-800/80 bg-[#080d19]/60">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-400 via-indigo-500 to-purple-600 p-0.5 shadow-md shadow-cyan-500/20 flex items-center justify-center shrink-0">
+              <div className="w-full h-full bg-[#0a0f1d] rounded-[10px] flex items-center justify-center">
+                <Cpu className="w-5 h-5 text-cyan-400 animate-pulse" />
+              </div>
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-base tracking-tight text-white glow-text-cyan">rafx2</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">LMS</span>
+              </div>
+              <p className="text-[9px] text-cyan-400/80 tracking-widest font-mono uppercase">Informatika & AI Hub</p>
+            </div>
           </div>
           <button
             onClick={() => setIsSidebarOpen(false)}
-            className="p-1 text-slate-500 hover:text-slate-800"
+            className="p-1 text-slate-400 hover:text-white md:hidden"
           >
-            <X className="w-6 h-6" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-5 border-b border-slate-200">
+        {/* User Card */}
+        <div className="p-4 border-b border-slate-800/80 bg-[#090e1c]/40">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm uppercase shrink-0">
-              {user?.name?.substring(0, 2) || 'U'}
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-indigo-600/30 border border-cyan-500/40 flex items-center justify-center text-cyan-300 font-mono font-bold text-sm uppercase shrink-0 shadow-inner">
+              {user?.name?.substring(0, 2) || 'RX'}
             </div>
             <div className="flex flex-col min-w-0 flex-1">
-              <span className="font-semibold text-sm text-slate-800 truncate">{user?.name}</span>
-              <span className="text-xs text-slate-500 capitalize">{user?.role.toLowerCase().replace('_', ' ')}</span>
+              <span className="font-bold text-sm text-slate-100 truncate">{user?.name}</span>
+              <div className="flex items-center gap-1.5 text-[11px] text-cyan-400/90 font-mono">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                <span className="capitalize truncate">
+                  {user?.role === 'STUDENT' ? (user?.classId ? `Kelas ${user.classId}` : 'Siswa Informatika') : user?.role.toLowerCase().replace('_', ' ')}
+                </span>
+              </div>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowChangePassword(true)}
-            className="mt-3 text-xs text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100/90 px-3 py-1.5 rounded-lg border border-indigo-200/70 transition-colors flex items-center gap-2 w-full justify-center font-medium"
-            title="Ganti kata sandi akun Anda"
-          >
-            <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
-            Ubah Kata Sandi
-          </button>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setShowChangePassword(true)}
+              className="text-[11px] text-cyan-300 hover:text-white bg-cyan-950/40 hover:bg-cyan-900/50 px-2 py-1.5 rounded-lg border border-cyan-500/30 transition-colors flex items-center gap-1.5 justify-center font-medium truncate cursor-pointer"
+              title="Ganti kata sandi akun Anda"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="truncate">Kata Sandi</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-[11px] text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-900/60 px-2 py-1.5 rounded-lg border border-rose-500/40 transition-colors flex items-center gap-1.5 justify-center font-bold truncate shadow-xs cursor-pointer"
+              title="Keluar dari akun Anda"
+            >
+              <LogOut className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span>Keluar</span>
+            </button>
+          </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-1">
+        {/* Navigation Items */}
+        <nav className="flex-1 overflow-y-auto py-3 px-2.5 flex flex-col gap-1">
+          <div className="px-3 py-1 text-[10px] font-mono font-bold tracking-wider text-slate-500 uppercase">
+            Menu Pembelajaran
+          </div>
           {navItems.map((item: any) => {
             const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + '/');
             return (
@@ -175,18 +249,27 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 to={item.href}
                 className={cn(
-                  "flex items-center justify-between px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors",
+                  "flex items-center justify-between px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all group",
                   isActive
-                    ? (item.isDanger ? "bg-rose-50 text-rose-700 font-semibold" : "bg-indigo-50 text-indigo-700 font-semibold")
-                    : (item.isDanger ? "text-rose-600 hover:bg-rose-50/70" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900")
+                    ? (item.isDanger 
+                        ? "bg-rose-950/50 text-rose-300 border border-rose-500/40 shadow-xs" 
+                        : "bg-gradient-to-r from-cyan-950/70 via-indigo-950/50 to-slate-900 text-cyan-300 border border-cyan-500/40 shadow-xs font-semibold glow-cyan")
+                    : (item.isDanger 
+                        ? "text-rose-400 hover:bg-rose-950/30" 
+                        : "text-slate-400 hover:bg-slate-800/50 hover:text-cyan-200")
                 )}
               >
-                <div className="flex items-center gap-3">
-                  <item.icon className={cn("w-4 h-4 sm:w-5 sm:h-5", isActive ? (item.isDanger ? "text-rose-600" : "text-indigo-600") : (item.isDanger ? "text-rose-500" : "text-slate-400"))} />
+                <div className="flex items-center gap-2.5">
+                  <item.icon className={cn(
+                    "w-4 h-4 sm:w-4.5 sm:h-4.5 transition-colors", 
+                    isActive 
+                      ? (item.isDanger ? "text-rose-400" : "text-cyan-400") 
+                      : (item.isDanger ? "text-rose-400/70" : "text-slate-500 group-hover:text-cyan-400")
+                  )} />
                   <span>{item.name}</span>
                 </div>
                 {item.badge && (
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 uppercase tracking-wider">
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-900/60 text-cyan-300 border border-cyan-500/30">
                     {item.badge}
                   </span>
                 )}
@@ -195,18 +278,18 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        {/* GAS Database Live Connection Status */}
-        <div className="px-4 py-2 bg-slate-50 border-t border-slate-200">
+        {/* Database Status Chip */}
+        <div className="px-4 py-2.5 bg-[#080d19] border-t border-slate-800/80">
           <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-1.5 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
               <span className="flex h-2 w-2 relative shrink-0">
                 {isConnected && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
                 )}
-                <span className={cn("relative inline-flex rounded-full h-2 w-2", isConnected ? "bg-emerald-500" : "bg-amber-500")}></span>
+                <span className={cn("relative inline-flex rounded-full h-2 w-2", isConnected ? "bg-cyan-400" : "bg-amber-400")}></span>
               </span>
-              <span className={cn("font-medium truncate text-[11px]", isConnected ? "text-emerald-700 font-semibold" : "text-amber-700")}>
-                {isConnected ? 'Database GAS Aktif' : 'GAS Disinkronkan...'}
+              <span className={cn("font-mono text-[10px] truncate", isConnected ? "text-cyan-300 font-medium" : "text-amber-300")}>
+                {isConnected ? 'Database GAS: Terhubung' : 'GAS: Menyinkronkan...'}
               </span>
             </div>
             <button
@@ -226,39 +309,43 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                   setIsCheckingGas(false);
                 }
               }}
-              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer underline shrink-0 disabled:opacity-50 flex items-center gap-1"
+              className="text-[10px] font-mono text-cyan-400 hover:text-cyan-200 underline cursor-pointer disabled:opacity-50 flex items-center gap-1"
               title="Cek & Sinkronkan Koneksi Google Sheets"
             >
-              {isCheckingGas ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : 'Cek'}
+              {isCheckingGas ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : 'Sync'}
             </button>
           </div>
         </div>
 
-        {/* Pasang Aplikasi Android Shortcut */}
-        <div className="p-3 border-t border-slate-200 bg-indigo-50/40">
-          <PWAInstallButton variant="pill" className="w-full justify-center text-center" />
+        {/* PWA Mobile Shortcut */}
+        <div className="p-3 border-t border-slate-800/80 bg-[#070b14]/60 space-y-1.5">
+          <div className="text-[10px] font-mono text-slate-400 px-1 uppercase tracking-wider flex items-center gap-1">
+            <Smartphone className="w-3 h-3 text-cyan-400" /> Aplikasi HP:
+          </div>
+          <PWAInstallButton variant="dual" className="w-full justify-between" />
         </div>
 
-        <div className="p-4 border-t border-slate-200 space-y-1">
+        {/* Bottom Profile Actions */}
+        <div className="p-3 border-t border-slate-800/80 bg-[#080d19] space-y-1">
           <button
             type="button"
             onClick={() => setShowChangePassword(true)}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 w-full transition-colors"
+            className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-cyan-300 hover:bg-slate-800/50 w-full transition-colors"
           >
-            <KeyRound className="w-4 h-4 text-slate-400" />
+            <KeyRound className="w-3.5 h-3.5 text-slate-500" />
             Ubah Kata Sandi
           </button>
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-rose-600 hover:bg-rose-50 w-full transition-colors"
+            className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-rose-400 hover:bg-rose-950/40 w-full transition-colors"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="w-3.5 h-3.5" />
             Keluar Akun
           </button>
         </div>
       </motion.aside>
 
-      {/* Main Content: Expands fully across the entire screen when menu is hidden */}
+      {/* Main Content Area */}
       <main 
         id="main-content-canvas"
         className={cn(
@@ -268,19 +355,48 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
             : "ml-0 max-w-none p-4 md:p-8 lg:p-10 pt-16 md:pt-8"
         )}
       >
-        {/* Toggle Button for Desktop when sidebar is open */}
-        {isSidebarOpen && (
-          <div className="hidden md:flex items-center justify-between mb-4 pb-2 border-b border-slate-200/60">
+        {/* Desktop Top Header Bar with Easy Access Logout & AI Badge */}
+        <div className="hidden md:flex items-center justify-between mb-6 pb-3 border-b border-cyan-500/20 bg-[#0d1527]/80 backdrop-blur-md -mt-2 px-5 py-3 rounded-2xl shadow-xl">
+          <div className="flex items-center gap-3">
             <button
-              onClick={() => setIsSidebarOpen(false)}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200/80 bg-white hover:bg-slate-50 text-slate-600 hover:text-indigo-600 text-xs font-medium shadow-xs transition-all hover:border-indigo-200"
-              title="Sembunyikan Menu Navigasi (Perbesar Layar Dashboard)"
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-700/80 bg-[#0a0f1d] hover:bg-slate-800 text-slate-300 hover:text-cyan-400 text-xs font-semibold shadow-xs transition-all hover:border-cyan-500/40 cursor-pointer"
+              title={isSidebarOpen ? "Sembunyikan Menu Navigasi" : "Buka Menu Navigasi"}
             >
-              <Menu className="w-4 h-4 text-slate-500 hover:text-indigo-600" />
-              <span>Sembunyikan Menu (Perbesar Tampilan)</span>
+              <Menu className="w-4 h-4 text-cyan-400" />
+              <span>{isSidebarOpen ? "Sembunyikan Panel" : "Buka Panel"}</span>
+            </button>
+
+            <div className="flex items-center gap-2 px-3 py-1 rounded-xl bg-cyan-950/40 border border-cyan-500/30 text-xs font-mono text-cyan-300">
+              <Code2 className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Mata Pelajaran: <strong>Informatika</strong></span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5 px-3 py-1 bg-[#0a0f1d] border border-slate-800 rounded-xl shadow-xs">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-cyan-500 to-indigo-600 flex items-center justify-center text-white font-mono font-bold text-xs uppercase shrink-0">
+                {user?.name?.substring(0, 2) || 'RX'}
+              </div>
+              <div className="text-left">
+                <p className="text-xs font-bold text-slate-100 leading-tight truncate max-w-[160px]">{user?.name}</p>
+                <p className="text-[10px] text-cyan-400 font-mono">
+                  {user?.role === 'STUDENT' ? (user?.classId ? `Kelas ${user.classId}` : 'Siswa Informatika') : user?.role.toLowerCase().replace('_', ' ')}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-rose-500/40 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-bold text-xs shadow-xs transition-all cursor-pointer"
+              title="Keluar dari akun (Logout)"
+            >
+              <LogOut className="w-3.5 h-3.5 text-rose-400" />
+              <span>Keluar Akun</span>
             </button>
           </div>
-        )}
+        </div>
         {children}
       </main>
 

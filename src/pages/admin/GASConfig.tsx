@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Copy, CheckCircle2, Server, Download, ShieldAlert, Database, RefreshCw, CloudCheck, AlertTriangle } from 'lucide-react';
+import { Copy, CheckCircle2, Server, Download, ShieldAlert, Database, RefreshCw, CloudCheck, AlertTriangle, Trash2 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useGasStore } from '@/store/gasStore';
 import { useDataStore } from '@/store/dataStore';
@@ -19,18 +19,27 @@ function getOrCreateSheet(ss, name, headers) {
   }
   if (sheet.getLastRow() === 0 && headers && headers.length > 0) {
     sheet.appendRow(headers);
+  } else if (sheet.getLastRow() > 0 && headers && headers.length > 0) {
+    // Auto-migrate: check if any new headers are missing from row 1 and append them
+    var curHeaders = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0].map(function(h) { return String(h).trim(); });
+    for (var i = 0; i < headers.length; i++) {
+      if (curHeaders.indexOf(headers[i]) === -1) {
+        curHeaders.push(headers[i]);
+        sheet.getRange(1, curHeaders.length).setValue(headers[i]);
+      }
+    }
   }
   return sheet;
 }
 
 function ensureAllTablesExist(ss) {
   const sheets = {
-    'Users': ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password'],
-    'Materials': ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate'],
+    'Users': ['id', 'role', 'name', 'gender', 'subject', 'username', 'nik', 'nisn', 'classId', 'assignedClasses', 'password', 'status'],
+    'Materials': ['id', 'classId', 'targetClasses', 'subjectId', 'teacherId', 'teacherName', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate'],
     'Quizzes': ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt'],
-    'QuizQuestions': ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'],
-    'QuizResults': ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt'],
-    'Assignments': ['studentId', 'materialId', 'link', 'fileName', 'fileSize', 'submittedAt'],
+    'QuizQuestions': ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'type', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'correctOptionIndices', 'sampleAnswer', 'optionImagesJson', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'],
+    'QuizResults': ['id', 'quizId', 'quizTitle', 'subject', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'score', 'finalScore', 'violationsCount', 'violationLogsJson', 'penaltyDeduction', 'answersJson', 'essayScoresJson', 'submittedAt', 'disqualified', 'teacherNote'],
+    'Assignments': ['id', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'materialId', 'materialTitle', 'subject', 'link', 'fileName', 'fileSize', 'submittedAt', 'grade', 'feedback', 'gradedAt'],
     'StudentProgress': ['studentId', 'materialId', 'readAt']
   };
   
@@ -70,8 +79,12 @@ function findUserRow(sheet, user) {
     const rowNisn = String(rows[r][7] || '').trim();
 
     // 1. Match by NISN (Primary key for students)
-    if ((uRole === 'STUDENT' || rowRole === 'STUDENT') && uNisn && rowNisn && uNisn === rowNisn) {
-      return r + 1;
+    if ((uRole === 'STUDENT' || rowRole === 'STUDENT') && uNisn && rowNisn) {
+      const uNoZero = uNisn.replace(/^0+/, '');
+      const rNoZero = rowNisn.replace(/^0+/, '');
+      if (uNisn === rowNisn || (uNoZero && uNoZero === rNoZero)) {
+        return r + 1;
+      }
     }
     // 2. Match by NIK or Username (Primary key for teachers)
     if ((uRole === 'TEACHER' || rowRole === 'TEACHER')) {
@@ -90,34 +103,61 @@ function findUserRow(sheet, user) {
   return -1;
 }
 
-// Composite Primary Key for Assignments (studentId + materialId)
-function findAssignmentRow(sheet, studentId, materialId) {
+// Composite Primary Key for Assignments (studentId + materialId or id)
+function findAssignmentRow(sheet, studentId, materialId, id) {
   if (!sheet) return -1;
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return -1;
   const rows = sheet.getDataRange().getValues();
+  const headers = rows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+  const idCol = headers.indexOf('id');
+  const sidCol = headers.indexOf('studentid');
+  const midCol = headers.indexOf('materialid');
+
+  const targetId = String(id || '').trim();
   const sid = String(studentId || '').trim();
   const mid = String(materialId || '').trim();
+
   for (let r = 1; r < rows.length; r++) {
-    const rowSid = String(rows[r][0] || '').trim();
-    const rowMid = String(rows[r][1] || '').trim();
-    if (rowSid === sid && rowMid === mid) return r + 1;
+    const rowId = idCol >= 0 ? String(rows[r][idCol] || '').trim() : '';
+    const rowSid = sidCol >= 0 ? String(rows[r][sidCol] || '').trim() : String(rows[r][0] || '').trim();
+    const rowMid = midCol >= 0 ? String(rows[r][midCol] || '').trim() : String(rows[r][1] || '').trim();
+    if (targetId && rowId && targetId === rowId) return r + 1;
+    if (sid && mid && rowSid === sid && rowMid === mid) return r + 1;
   }
   return -1;
 }
 
-// Composite Primary Key for QuizResults (quizId + studentId)
-function findQuizResultRow(sheet, quizId, studentId) {
+// Composite Primary Key for QuizResults (id or quizId + studentId / studentNisn)
+function findQuizResultRow(sheet, quizId, studentId, studentNisn, id) {
   if (!sheet) return -1;
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return -1;
   const rows = sheet.getDataRange().getValues();
+  const headers = rows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+  const idCol = headers.indexOf('id');
+  const qidCol = headers.indexOf('quizid');
+  const sidCol = headers.indexOf('studentid');
+  const snisnCol = headers.indexOf('studentnisn');
+
+  const targetId = String(id || '').trim();
   const qid = String(quizId || '').trim();
   const sid = String(studentId || '').trim();
+  const nisn = String(studentNisn || '').trim();
+
   for (let r = 1; r < rows.length; r++) {
-    const rowQid = String(rows[r][1] || '').trim();
-    const rowSid = String(rows[r][2] || '').trim();
-    if (rowQid === qid && rowSid === sid) return r + 1;
+    const rowId = idCol >= 0 ? String(rows[r][idCol] || '').trim() : '';
+    const rowQid = qidCol >= 0 ? String(rows[r][qidCol] || '').trim() : String(rows[r][1] || '').trim();
+    const rowSid = sidCol >= 0 ? String(rows[r][sidCol] || '').trim() : String(rows[r][2] || '').trim();
+    const rowNisn = snisnCol >= 0 ? String(rows[r][snisnCol] || '').trim() : '';
+
+    if (targetId && rowId && targetId === rowId) return r + 1;
+    if (qid && rowQid === qid) {
+      if (sid && rowSid === sid) return r + 1;
+      if (nisn && rowNisn && nisn === rowNisn) return r + 1;
+      if (sid && rowNisn && sid === rowNisn) return r + 1;
+      if (nisn && rowSid && nisn === rowSid) return r + 1;
+    }
   }
   return -1;
 }
@@ -223,9 +263,11 @@ function cleanInitialSampleData(ss) {
     const mRows = mSheet.getDataRange().getValues();
     const seenMatIds = {};
     for (let r = mRows.length - 1; r >= 1; r--) {
-      const mId = String(mRows[r][0] || '').trim();
-      const mTitle = String(mRows[r][4] || '').toLowerCase().trim();
-      if (mId === 'm-1' || mId === 'm-demo' || mTitle.indexOf('contoh') > -1) {
+      const mId = String(mRows[r][0] || '').toLowerCase().trim();
+      const mTitle = String(mRows[r][6] || mRows[r][4] || '').toLowerCase().trim();
+      const isSampleMat = mId === 'm-1' || mId === 'm-demo' || mId.indexOf('test') > -1 ||
+        mTitle.indexOf('contoh') > -1 || mTitle.indexOf('uji coba') > -1 || mTitle.indexOf('dummy') > -1 || mTitle.indexOf('sample') > -1;
+      if (isSampleMat) {
         mSheet.deleteRow(r + 1);
         continue;
       }
@@ -239,17 +281,56 @@ function cleanInitialSampleData(ss) {
     }
   }
 
-  // 4. Deduplicate assignments by (studentId + materialId)
+  // 4. Deduplicate & Clean sample assignments
   const asgSheet = ss.getSheetByName('Assignments');
   if (asgSheet && asgSheet.getLastRow() > 1) {
     const asgRows = asgSheet.getDataRange().getValues();
     const seenAsg = {};
     for (let r = asgRows.length - 1; r >= 1; r--) {
-      const key = String(asgRows[r][0]).trim() + '::' + String(asgRows[r][1]).trim();
+      const row = asgRows[r];
+      const sId = String(row[1] || row[0] || '').toLowerCase().trim();
+      const mId = String(row[5] || row[1] || '').toLowerCase().trim();
+      const file = String(row[9] || row[3] || '').toLowerCase().trim();
+      const link = String(row[8] || row[2] || '').toLowerCase().trim();
+      const isSampleAsg = sId === 'student-1' || sId === 'student-test-1' || sId.indexOf('test') > -1 ||
+        mId === 'm-1' || mId === 'm-demo' || mId.indexOf('test') > -1 ||
+        file.indexOf('test') > -1 || link.indexOf('test') > -1 || file.indexOf('contoh') > -1;
+      if (isSampleAsg) {
+        asgSheet.deleteRow(r + 1);
+        continue;
+      }
+      const key = sId + '::' + mId;
       if (seenAsg[key]) {
         asgSheet.deleteRow(r + 1);
       } else {
         seenAsg[key] = true;
+      }
+    }
+  }
+
+  // 5. Deduplicate & Clean sample quiz results
+  const qrSheet = ss.getSheetByName('QuizResults');
+  if (qrSheet && qrSheet.getLastRow() > 1) {
+    const qrRows = qrSheet.getDataRange().getValues();
+    const headers = qrRows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+    const qidCol = headers.indexOf('quizid');
+    const sidCol = headers.indexOf('studentid');
+    const seenQr = {};
+    for (let r = qrRows.length - 1; r >= 1; r--) {
+      const row = qrRows[r];
+      const qId = qidCol >= 0 ? String(row[qidCol] || '').toLowerCase().trim() : String(row[1] || '').toLowerCase().trim();
+      const sId = sidCol >= 0 ? String(row[sidCol] || '').toLowerCase().trim() : String(row[2] || '').toLowerCase().trim();
+      const isSampleQr = sId === 'student-1' || sId === 'student-test-1' || sId.indexOf('test') > -1 ||
+        qId === 'q-1' || qId === 'quiz-1' || qId === 'quiz-cbt-1' || qId.indexOf('test') > -1;
+      if (isSampleQr) {
+        qrSheet.deleteRow(r + 1);
+        continue;
+      }
+      const key = qId + '::' + sId;
+      if (seenQr[key]) {
+        qrSheet.deleteRow(r + 1);
+      } else {
+        seenQr[key] = true;
       }
     }
   }
@@ -269,69 +350,184 @@ function initSuperAdminScriptProperties() {
   props.setProperty('SUPER_ADMIN_PASSWORD', 'Asepst007@');
 }
 
-function saveQuizQuestions(ss, quiz) {
-  if (!quiz || !quiz.id) return;
-  const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', [
-    'id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'
-  ]);
-  
-  // Hapus butir soal lama untuk quizId ini agar tidak duplikat
-  const lastRow = qqSheet.getLastRow();
-  if (lastRow > 1) {
-    const data = qqSheet.getRange(2, 2, lastRow - 1, 1).getValues();
-    for (let i = data.length - 1; i >= 0; i--) {
-      if (String(data[i][0]) === String(quiz.id)) {
-        qqSheet.deleteRow(i + 2);
-      }
+function formatGasDate(d) {
+  if (!d) return '';
+  if (Object.prototype.toString.call(d) === '[object Date]') {
+    try {
+      return Utilities.formatDate(d, Session.getScriptTimeZone() || 'Asia/Jakarta', "yyyy-MM-dd'T'HH:mm");
+    } catch (e) {
+      return d.toISOString().substring(0, 16);
     }
   }
+  var s = String(d).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) return s.substring(0, 16);
+
+  var spaceMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+  if (spaceMatch) {
+    return spaceMatch[1] + '-' + spaceMatch[2] + '-' + spaceMatch[3] + 'T' + spaceMatch[4] + ':' + spaceMatch[5];
+  }
+  var dmyMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\s+(\d{1,2}):(\d{2})/);
+  if (dmyMatch) {
+    var pad = function(n) { return String(n).length < 2 ? '0' + n : String(n); };
+    return dmyMatch[3] + '-' + pad(dmyMatch[2]) + '-' + pad(dmyMatch[1]) + 'T' + pad(dmyMatch[4]) + ':' + pad(dmyMatch[5]);
+  }
+
+  var parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    try {
+      return Utilities.formatDate(parsed, Session.getScriptTimeZone() || 'Asia/Jakarta', "yyyy-MM-dd'T'HH:mm");
+    } catch (e) {
+      return parsed.toISOString().substring(0, 16);
+    }
+  }
+  return s;
+}
+
+function saveQuizQuestions(ss, quiz) {
+  if (!quiz || !quiz.id) return;
+  const qqStandardHeaders = [
+    'id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'type', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'correctOptionIndices', 'sampleAnswer', 'optionImagesJson', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt'
+  ];
+  const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', qqStandardHeaders);
+  const curHeaders = qqSheet.getRange(1, 1, 1, Math.max(1, qqSheet.getLastColumn())).getValues()[0].map(function(h) { 
+    return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); 
+  });
   
-  // Simpan butir soal baru
   const questions = quiz.questions || [];
-  if (questions.length > 0) {
-    const rows = questions.map(function(q, idx) {
-      const opts = Array.isArray(q.options) ? q.options : [];
-      return [
-        q.id || ('q-' + (idx + 1)),
-        quiz.id,
-        quiz.title || '',
-        idx + 1,
-        q.text || '',
-        opts[0] || '',
-        opts[1] || '',
-        opts[2] || '',
-        opts[3] || '',
-        opts[4] || '',
-        q.correctOptionIndex !== undefined ? q.correctOptionIndex : 0,
-        q.points || 0,
-        q.imageUrl || '',
-        q.videoUrl || '',
-        q.audioUrl || '',
-        q.explanation || '',
-        new Date().toISOString()
-      ];
+  const newRows = questions.map(function(q, idx) {
+    const opts = Array.isArray(q.options) ? q.options : [];
+    const optImgs = Array.isArray(q.optionImages) ? q.optionImages : [];
+    const qType = q.type || (Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 1 ? 'MCMA' : (q.sampleAnswer ? 'ESSAY' : 'SINGLE'));
+    const corIndicesStr = Array.isArray(q.correctOptionIndices) ? JSON.stringify(q.correctOptionIndices) : '';
+    const optImgsStr = optImgs.length > 0 ? JSON.stringify(optImgs) : '';
+
+    const valMap = {
+      'id': q.id || ('q-' + (idx + 1)),
+      'quizid': quiz.id,
+      'idkuis': quiz.id,
+      'quiztitle': quiz.title || '',
+      'judulkuis': quiz.title || '',
+      'questionnumber': idx + 1,
+      'nomorsoal': idx + 1,
+      'nomor': idx + 1,
+      'text': q.text || '',
+      'soal': q.text || '',
+      'tekssoal': q.text || '',
+      'type': qType,
+      'jenissoal': qType,
+      'tipe': qType,
+      'optiona': opts[0] || '',
+      'opsia': opts[0] || '',
+      'pilihana': opts[0] || '',
+      'optionb': opts[1] || '',
+      'opsib': opts[1] || '',
+      'pilihanb': opts[1] || '',
+      'optionc': opts[2] || '',
+      'opsic': opts[2] || '',
+      'pilihanc': opts[2] || '',
+      'optiond': opts[3] || '',
+      'opsid': opts[3] || '',
+      'pilihand': opts[3] || '',
+      'optione': opts[4] || '',
+      'opsie': opts[4] || '',
+      'pilihane': opts[4] || '',
+      'correctoptionindex': (Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0)
+        ? q.correctOptionIndices[0]
+        : (q.correctOptionIndex !== undefined ? q.correctOptionIndex : 0),
+      'kunci': (Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0)
+        ? q.correctOptionIndices[0]
+        : (q.correctOptionIndex !== undefined ? q.correctOptionIndex : 0),
+      'kuncijawaban': (Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0)
+        ? q.correctOptionIndices[0]
+        : (q.correctOptionIndex !== undefined ? q.correctOptionIndex : 0),
+      'correctoptionindices': corIndicesStr,
+      'kuncikompleks': corIndicesStr,
+      'sampleanswer': q.sampleAnswer || '',
+      'kunciessai': q.sampleAnswer || '',
+      'rubrik': q.sampleAnswer || '',
+      'optionimagesjson': optImgsStr,
+      'gambarpilihan': optImgsStr,
+      'points': q.points !== undefined ? Number(q.points) : 10,
+      'poin': q.points !== undefined ? Number(q.points) : 10,
+      'bobot': q.points !== undefined ? Number(q.points) : 10,
+      'imageurl': q.imageUrl || '',
+      'linkgambar': q.imageUrl || '',
+      'gambar': q.imageUrl || '',
+      'videourl': q.videoUrl || '',
+      'linkvideo': q.videoUrl || '',
+      'video': q.videoUrl || '',
+      'audiourl': q.audioUrl || '',
+      'linkaudio': q.audioUrl || '',
+      'audio': q.audioUrl || '',
+      'explanation': q.explanation || '',
+      'pembahasan': q.explanation || '',
+      'createdat': new Date().toISOString()
+    };
+
+    return curHeaders.map(function(h) {
+      return valMap[h] !== undefined ? valMap[h] : '';
     });
-    qqSheet.getRange(qqSheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  });
+
+  // Dynamic row expansion & safe atomic update:
+  // Preserves existing questions for OTHER quizzes, and replaces or appends questions for THIS quiz
+  const targetCols = curHeaders.length;
+  const lastRow = qqSheet.getLastRow();
+  let remainingRows = [];
+  if (lastRow > 1) {
+    const allData = qqSheet.getRange(2, 1, lastRow - 1, qqSheet.getLastColumn()).getValues();
+    const qidIdx = curHeaders.indexOf('quizid') >= 0 ? curHeaders.indexOf('quizid') : 1;
+    remainingRows = allData
+      .filter(function(r) { return String(r[qidIdx]) !== String(quiz.id); })
+      .map(function(r) {
+        while (r.length < targetCols) r.push('');
+        return r.slice(0, targetCols);
+      });
+  }
+  const combined = remainingRows.concat(newRows);
+  if (combined.length > 0) {
+    // If the spreadsheet doesn't have enough rows, automatically insert rows so it never gets capped
+    const currentMaxRows = qqSheet.getMaxRows();
+    const neededRows = combined.length + 50;
+    if (neededRows > currentMaxRows) {
+      qqSheet.insertRowsAfter(currentMaxRows, neededRows - currentMaxRows);
+    }
+    // Clear only old content range
+    if (lastRow > 1) {
+      qqSheet.getRange(2, 1, lastRow - 1, qqSheet.getLastColumn()).clearContent();
+    }
+    const writeRange = qqSheet.getRange(2, 1, combined.length, targetCols);
+    writeRange.setValues(combined);
+
+    // Format text columns (like JSON strings) as plain text so Google Sheet doesn't corrupt quotes
+    const corIdxCol = curHeaders.indexOf('correctoptionindices') + 1;
+    if (corIdxCol > 0) {
+      qqSheet.getRange(2, corIdxCol, combined.length, 1).setNumberFormat('@');
+    }
   }
 }
 
-function saveOrUpdateQuiz(ss, quiz) {
+function saveOrUpdateQuiz(ss, quiz, shouldUpdateQuestions) {
   if (!quiz || !quiz.id) return;
   const qSheet = getOrCreateSheet(ss, 'Quizzes', [
     'id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt'
   ]);
   
   const questions = quiz.questions || [];
+  const startStr = quiz.isScheduled ? formatGasDate(quiz.startTime) : '';
+  const endStr = quiz.isScheduled ? formatGasDate(quiz.endTime) : '';
   const qRow = [
     quiz.id,
     quiz.materialId || '',
     quiz.classId || '',
     quiz.subjectId || '',
     quiz.title || '',
-    quiz.durationMinutes || 45,
+    Number(quiz.durationMinutes) || 45,
     quiz.isScheduled ? 'TRUE' : 'FALSE',
-    quiz.startTime || '',
-    quiz.endTime || '',
+    startStr,
+    endStr,
     questions.length,
     JSON.stringify(questions),
     quiz.createdAt || new Date().toISOString()
@@ -341,11 +537,19 @@ function saveOrUpdateQuiz(ss, quiz) {
   const rowIdx = findRowIndex(qSheet, 0, quiz.id);
   if (rowIdx > -1) {
     qSheet.getRange(rowIdx, 1, 1, qRow.length).setValues([qRow]);
+    if (startStr) qSheet.getRange(rowIdx, 8).setNumberFormat('@').setValue(startStr);
+    if (endStr) qSheet.getRange(rowIdx, 9).setNumberFormat('@').setValue(endStr);
   } else {
     qSheet.appendRow(qRow);
+    const newRow = qSheet.getLastRow();
+    if (startStr) qSheet.getRange(newRow, 8).setNumberFormat('@').setValue(startStr);
+    if (endStr) qSheet.getRange(newRow, 9).setNumberFormat('@').setValue(endStr);
   }
   
-  saveQuizQuestions(ss, quiz);
+  // Only update question sub-table if explicitly requested or new quiz with questions
+  if (shouldUpdateQuestions || (rowIdx === -1 && questions.length > 0)) {
+    saveQuizQuestions(ss, quiz);
+  }
 }
 
 function doPost(e) {
@@ -555,27 +759,44 @@ function doPost(e) {
       const sheet = ss.getSheetByName('Users');
       if (sheet && sheet.getLastRow() > 1) {
         const rows = sheet.getDataRange().getValues();
+        const headers = rows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        let passCol = headers.indexOf('password');
+        if (passCol < 0) passCol = headers.indexOf('pass');
+        if (passCol < 0) passCol = headers.indexOf('katasandi');
+        if (passCol < 0) passCol = 10;
+
+        const idCol = headers.indexOf('id');
+        const userCol = headers.indexOf('username');
+        const nikCol = headers.indexOf('nik');
+        const nisnCol = headers.indexOf('nisn');
+        const nameCol = headers.indexOf('name') >= 0 ? headers.indexOf('name') : headers.indexOf('nama');
+
         let targetRow = -1;
         const targetId = String(data.id || '').trim();
         const targetNisn = String(data.nisn || '').trim();
+        const targetNisnNoZero = targetNisn.replace(/^0+/, '');
         const targetNik = String(data.nik || '').trim();
         const targetUser = String(data.username || '').toLowerCase().trim();
+        const targetName = String(data.name || '').toLowerCase().trim();
         const newPass = String(data.password || '').trim();
 
         for (let r = 1; r < rows.length; r++) {
-          const rowId = String(rows[r][0]).trim();
-          const rowUser = String(rows[r][5]).toLowerCase().trim();
-          const rowNik = String(rows[r][6]).trim();
-          const rowNisn = String(rows[r][7]).trim();
+          const rowId = idCol >= 0 ? String(rows[r][idCol] || '').trim() : String(rows[r][0] || '').trim();
+          const rowUser = userCol >= 0 ? String(rows[r][userCol] || '').toLowerCase().trim() : String(rows[r][5] || '').toLowerCase().trim();
+          const rowNik = nikCol >= 0 ? String(rows[r][nikCol] || '').trim() : String(rows[r][6] || '').trim();
+          const rowNisn = nisnCol >= 0 ? String(rows[r][nisnCol] || '').trim() : String(rows[r][7] || '').trim();
+          const rowNisnNoZero = rowNisn.replace(/^0+/, '');
+          const rowName = nameCol >= 0 ? String(rows[r][nameCol] || '').toLowerCase().trim() : String(rows[r][2] || '').toLowerCase().trim();
 
           if (targetId && rowId === targetId) { targetRow = r + 1; break; }
-          if (targetNisn && rowNisn === targetNisn) { targetRow = r + 1; break; }
+          if (targetNisn && (rowNisn === targetNisn || (targetNisnNoZero && rowNisnNoZero === targetNisnNoZero))) { targetRow = r + 1; break; }
           if (targetNik && rowNik === targetNik) { targetRow = r + 1; break; }
           if (targetUser && rowUser === targetUser) { targetRow = r + 1; break; }
+          if (targetName && rowName && targetName === rowName) { targetRow = r + 1; break; }
         }
 
         if (targetRow > -1 && newPass) {
-          sheet.getRange(targetRow, 11).setValue(newPass);
+          sheet.getRange(targetRow, passCol + 1).setNumberFormat('@').setValue(newPass);
           return ContentService.createTextOutput(JSON.stringify({ 
             success: true, 
             message: 'Kata sandi berhasil diperbarui dan tersimpan permanen di Google Sheet!' 
@@ -624,10 +845,12 @@ function doPost(e) {
           }
           const passToSet = u.password !== undefined ? u.password : data.password;
           if (passToSet !== undefined && String(passToSet).trim() !== '') {
-            sheet.getRange(targetRow, 11).setValue(String(passToSet).trim());
+            sheet.getRange(targetRow, 11).setNumberFormat('@').setValue(String(passToSet).trim());
           }
+          return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Data pengguna diperbarui di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
         }
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Pengguna tidak ditemukan' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'deleteUser') {
       const sheet = ss.getSheetByName('Users');
@@ -657,32 +880,41 @@ function doPost(e) {
           }
         }
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Pengguna dihapus dari Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'resetPassword') {
       const sheet = ss.getSheetByName('Users');
       const rowIdx = findRowIndex(sheet, 0, data.id);
-      if (rowIdx > -1) sheet.getRange(rowIdx, 11).setValue(data.password);
+      if (rowIdx > -1) {
+        sheet.getRange(rowIdx, 11).setNumberFormat('@').setValue(data.password);
+        return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Kata sandi direset di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Pengguna tidak ditemukan' })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // CRUD Handlers - Materials
     else if (action === 'addMaterial') {
       const m = data.material;
       const url = m.pdfUrl || m.youtubeUrl || m.linkUrl || '';
-      const mSheet = getOrCreateSheet(ss, 'Materials', ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate']);
+      const targetClasses = Array.isArray(m.targetClasses) ? m.targetClasses.join(', ') : (m.targetClasses || m.classId || '');
+      const mHeaders = ['id', 'classId', 'targetClasses', 'subjectId', 'teacherId', 'teacherName', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate'];
+      const mSheet = getOrCreateSheet(ss, 'Materials', mHeaders);
       const rowIdx = findRowIndex(mSheet, 0, m.id);
       const rowData = [
         m.id, 
-        m.classId, 
-        m.subjectId, 
-        m.teacherId, 
-        m.title, 
+        m.classId || '', 
+        targetClasses,
+        m.subjectId || '', 
+        m.teacherId || '', 
+        m.teacherName || '',
+        m.title || '', 
         m.content || '', 
-        m.type, 
+        m.type || 'LINK', 
         url, 
-        m.chapter, 
-        m.order, 
-        m.semester, 
-        m.createdAt,
+        m.chapter || '', 
+        m.order || 1, 
+        m.semester || 1, 
+        m.createdAt || new Date().toISOString(),
         m.hasAssignment ? 'TRUE' : 'FALSE',
         m.assignmentTitle || '',
         m.assignmentInstructions || '',
@@ -693,47 +925,63 @@ function doPost(e) {
       } else {
         mSheet.appendRow(rowData);
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Materi berhasil disimpan di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'updateMaterial') {
       const sheet = ss.getSheetByName('Materials');
       const rowIdx = findRowIndex(sheet, 0, data.id);
       if (rowIdx > -1) {
-        const m = data.data;
-        if (m.title !== undefined) sheet.getRange(rowIdx, 5).setValue(m.title);
-        if (m.content !== undefined) sheet.getRange(rowIdx, 6).setValue(m.content);
-        if (m.type !== undefined) sheet.getRange(rowIdx, 7).setValue(m.type);
-        if (m.order !== undefined) sheet.getRange(rowIdx, 10).setValue(m.order);
-        if (m.hasAssignment !== undefined) sheet.getRange(rowIdx, 13).setValue(m.hasAssignment ? 'TRUE' : 'FALSE');
-        if (m.assignmentTitle !== undefined) sheet.getRange(rowIdx, 14).setValue(m.assignmentTitle || '');
-        if (m.assignmentInstructions !== undefined) sheet.getRange(rowIdx, 15).setValue(m.assignmentInstructions || '');
-        if (m.assignmentDueDate !== undefined) sheet.getRange(rowIdx, 16).setValue(m.assignmentDueDate || '');
+        const m = data.data || {};
+        const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        function setIfDef(colName, val) {
+          const idx = headers.indexOf(colName);
+          if (idx >= 0 && val !== undefined) sheet.getRange(rowIdx, idx + 1).setValue(val);
+        }
+        setIfDef('title', m.title);
+        setIfDef('content', m.content);
+        setIfDef('type', m.type);
+        setIfDef('teachername', m.teacherName);
+        if (m.targetClasses !== undefined) {
+          const tc = Array.isArray(m.targetClasses) ? m.targetClasses.join(', ') : m.targetClasses;
+          setIfDef('targetclasses', tc);
+        }
+        setIfDef('order', m.order);
+        if (m.hasAssignment !== undefined) setIfDef('hasassignment', m.hasAssignment ? 'TRUE' : 'FALSE');
+        setIfDef('assignmenttitle', m.assignmentTitle || '');
+        setIfDef('assignmentinstructions', m.assignmentInstructions || '');
+        setIfDef('assignmentduedate', m.assignmentDueDate || '');
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Materi berhasil diperbarui di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'deleteMaterial') {
       const sheet = ss.getSheetByName('Materials');
       const rowIdx = findRowIndex(sheet, 0, data.id);
       if (rowIdx > -1) sheet.deleteRow(rowIdx);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Materi berhasil dihapus dari Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // CRUD Handlers - Quizzes & Questions
     else if (action === 'addQuiz' || action === 'saveQuiz') {
       const q = data.quiz;
-      saveOrUpdateQuiz(ss, q);
+      saveOrUpdateQuiz(ss, q, true);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Kuis berhasil disimpan di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'updateQuiz') {
       const quiz = data.quiz;
       if (quiz && quiz.id) {
-        saveOrUpdateQuiz(ss, quiz);
+        const hasQuestions = Array.isArray(quiz.questions) && (quiz.questions.length > 0 || Boolean(data.updateQuestions) || Boolean(data.data && data.data.questions));
+        saveOrUpdateQuiz(ss, quiz, hasQuestions);
       } else {
         const sheet = getOrCreateSheet(ss, 'Quizzes', ['id', 'materialId', 'classId', 'subjectId', 'title', 'durationMinutes', 'isScheduled', 'startTime', 'endTime', 'totalQuestions', 'questionsJson', 'createdAt']);
         const rowIdx = findRowIndex(sheet, 0, data.id);
         const q = data.data || {};
         if (rowIdx > -1) {
           if (q.title !== undefined) sheet.getRange(rowIdx, 5).setValue(q.title);
-          if (q.durationMinutes !== undefined) sheet.getRange(rowIdx, 6).setValue(q.durationMinutes);
+          if (q.durationMinutes !== undefined) sheet.getRange(rowIdx, 6).setValue(Number(q.durationMinutes));
           if (q.isScheduled !== undefined) sheet.getRange(rowIdx, 7).setValue(q.isScheduled ? 'TRUE' : 'FALSE');
-          if (q.startTime !== undefined) sheet.getRange(rowIdx, 8).setValue(q.startTime);
-          if (q.endTime !== undefined) sheet.getRange(rowIdx, 9).setValue(q.endTime);
+          if (q.startTime !== undefined) sheet.getRange(rowIdx, 8).setNumberFormat('@').setValue(formatGasDate(q.startTime) || '');
+          if (q.endTime !== undefined) sheet.getRange(rowIdx, 9).setNumberFormat('@').setValue(formatGasDate(q.endTime) || '');
+          if (q.classId !== undefined) sheet.getRange(rowIdx, 3).setValue(q.classId);
           if (q.questions !== undefined) {
             sheet.getRange(rowIdx, 10).setValue(q.questions.length);
             sheet.getRange(rowIdx, 11).setValue(JSON.stringify(q.questions));
@@ -741,12 +989,14 @@ function doPost(e) {
           }
         }
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Jadwal & data kuis berhasil diperbarui di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'syncQuizQuestions') {
       const quiz = data.quiz;
       if (quiz) {
-        saveOrUpdateQuiz(ss, quiz);
+        saveOrUpdateQuiz(ss, quiz, true);
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Butir soal kuis berhasil disinkronkan ke Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'deleteQuiz') {
       const sheet = ss.getSheetByName('Quizzes');
@@ -763,51 +1013,177 @@ function doPost(e) {
           }
         }
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Kuis berhasil dihapus dari Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'submitQuiz') {
-      const r = data.result;
-      const resSheet = getOrCreateSheet(ss, 'QuizResults', ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt']);
-      const rowIdx = findQuizResultRow(resSheet, r.quizId, r.studentId);
-      const rowData = [
-        r.id,
-        r.quizId,
-        r.studentId,
-        r.score,
-        r.finalScore !== undefined ? r.finalScore : r.score,
-        r.violationsCount || 0,
-        JSON.stringify(r.answers || {}),
-        r.submittedAt || new Date().toISOString()
-      ];
+      const r = data.result || data;
+      const qrHeaders = ['id', 'quizId', 'quizTitle', 'subject', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'score', 'finalScore', 'violationsCount', 'answersJson', 'essayScoresJson', 'submittedAt', 'disqualified', 'teacherNote'];
+      const resSheet = getOrCreateSheet(ss, 'QuizResults', qrHeaders);
+      const rowIdx = findQuizResultRow(resSheet, r.quizId, r.studentId, r.studentNisn, r.id);
+
+      const headers = resSheet.getRange(1, 1, 1, resSheet.getLastColumn()).getValues()[0].map(function(h) { 
+        return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); 
+      });
+      
+      const scoreVal = r.score !== undefined ? Number(r.score) : 0;
+      const fScoreVal = r.finalScore !== undefined ? Number(r.finalScore) : scoreVal;
+      const violVal = Number(r.violationsCount || (r.violationLogs ? r.violationLogs.length : 0) || 0);
+      const ansVal = typeof r.answers === 'string' ? r.answers : JSON.stringify(r.answers || {});
+      const essayVal = r.essayScores ? (typeof r.essayScores === 'string' ? r.essayScores : JSON.stringify(r.essayScores)) : '{}';
+
+      const valMap = {
+        'id': r.id || ('qr-' + new Date().getTime() + '-' + Math.floor(Math.random() * 10000)),
+        'quizid': r.quizId || '',
+        'idkuis': r.quizId || '',
+        'quiztitle': r.quizTitle || '',
+        'judulkuis': r.quizTitle || '',
+        'subject': r.subject || '',
+        'mapel': r.subject || '',
+        'studentid': r.studentId || '',
+        'idsiswa': r.studentId || '',
+        'studentname': r.studentName || '',
+        'namasiswa': r.studentName || '',
+        'nama': r.studentName || '',
+        'studentnisn': r.studentNisn || '',
+        'nisn': r.studentNisn || '',
+        'studentclass': r.studentClass || '',
+        'kelas': r.studentClass || '',
+        'score': scoreVal,
+        'nilai': scoreVal,
+        'finalscore': fScoreVal,
+        'nilaiakhir': fScoreVal,
+        'violationscount': violVal,
+        'pelanggaran': violVal,
+        'violationlogsjson': Array.isArray(r.violationLogs) ? JSON.stringify(r.violationLogs) : '[]',
+        'penaltydeduction': Number(r.penaltyDeduction || 0),
+        'answersjson': ansVal,
+        'jawaban': ansVal,
+        'essayscoresjson': essayVal,
+        'nilaiessai': essayVal,
+        'submittedat': r.submittedAt || new Date().toISOString(),
+        'waktusubmit': r.submittedAt || new Date().toISOString(),
+        'disqualified': r.disqualified ? 'YA' : 'TIDAK',
+        'didiskualifikasi': r.disqualified ? 'YA' : 'TIDAK',
+        'teachernote': r.teacherNote || '',
+        'catatan': r.teacherNote || ''
+      };
+
+      const rowData = headers.map(function(h) {
+        return valMap[h] !== undefined ? valMap[h] : '';
+      });
+
       if (rowIdx > -1) {
         resSheet.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
       } else {
         resSheet.appendRow(rowData);
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Hasil ujian berhasil disimpan di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
+    }
+    else if (action === 'updateQuizResult') {
+      const qrHeaders = ['id', 'quizId', 'quizTitle', 'subject', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'score', 'finalScore', 'violationsCount', 'answersJson', 'essayScoresJson', 'submittedAt', 'disqualified', 'teacherNote'];
+      const resSheet = getOrCreateSheet(ss, 'QuizResults', qrHeaders);
+      const rowIdx = findQuizResultRow(resSheet, data.quizId, data.studentId, data.studentNisn, data.id || data.resultId);
+      if (rowIdx > -1) {
+        const headers = resSheet.getRange(1, 1, 1, resSheet.getLastColumn()).getValues()[0].map(function(h) { 
+          return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); 
+        });
+        function setIfDef(colName, val) {
+          const idx = headers.indexOf(colName);
+          if (idx >= 0 && val !== undefined) resSheet.getRange(rowIdx, idx + 1).setValue(val);
+        }
+        const d = data.data || data;
+        if (d.score !== undefined) setIfDef('score', Number(d.score));
+        if (d.finalScore !== undefined) setIfDef('finalscore', Number(d.finalScore));
+        if (d.essayScores !== undefined) {
+          const esVal = typeof d.essayScores === 'string' ? d.essayScores : JSON.stringify(d.essayScores);
+          setIfDef('essayscoresjson', esVal);
+        }
+        if (d.teacherNote !== undefined) setIfDef('teachernote', String(d.teacherNote));
+        if (d.disqualified !== undefined) setIfDef('disqualified', d.disqualified ? 'YA' : 'TIDAK');
+        if (d.answers !== undefined) {
+          const aVal = typeof d.answers === 'string' ? d.answers : JSON.stringify(d.answers);
+          setIfDef('answersjson', aVal);
+        }
+        return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Hasil ujian siswa diperbarui di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Hasil ujian tidak ditemukan di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
+    }
+    else if (action === 'deleteQuizResult' || action === 'resetStudentQuiz') {
+      const qrHeaders = ['id', 'quizId', 'quizTitle', 'subject', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'score', 'finalScore', 'violationsCount', 'answersJson', 'essayScoresJson', 'submittedAt', 'disqualified', 'teacherNote'];
+      const resSheet = getOrCreateSheet(ss, 'QuizResults', qrHeaders);
+      const rowIdx = findQuizResultRow(resSheet, data.quizId, data.studentId, data.studentNisn, data.id || data.resultId);
+      if (rowIdx > -1) {
+        resSheet.deleteRow(rowIdx);
+        return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Hasil ujian siswa berhasil dihapus dari Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Data hasil kuis tidak ditemukan atau sudah bersih di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'submitAssignment') {
-      const asgSheet = getOrCreateSheet(ss, 'Assignments', ['studentId', 'materialId', 'link', 'fileName', 'fileSize', 'submittedAt']);
-      const rowIdx = findAssignmentRow(asgSheet, data.studentId, data.materialId);
+      const asgHeaders = ['id', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'materialId', 'materialTitle', 'subject', 'link', 'fileName', 'fileSize', 'submittedAt', 'grade', 'feedback', 'gradedAt'];
+      const asgSheet = getOrCreateSheet(ss, 'Assignments', asgHeaders);
+      const rowIdx = findAssignmentRow(asgSheet, data.studentId, data.materialId, data.id);
+      
+      let existingGrade = '';
+      let existingFeedback = '';
+      let existingGradedAt = '';
+      let existingId = data.id || ('asg-' + new Date().getTime() + '-' + Math.floor(Math.random() * 10000));
+
+      if (rowIdx > -1) {
+        const curRow = asgSheet.getRange(rowIdx, 1, 1, asgSheet.getLastColumn()).getValues()[0];
+        const headers = asgSheet.getRange(1, 1, 1, asgSheet.getLastColumn()).getValues()[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        const gIdx = headers.indexOf('grade');
+        const fIdx = headers.indexOf('feedback');
+        const gaIdx = headers.indexOf('gradedat');
+        const idIdx = headers.indexOf('id');
+        if (gIdx >= 0 && curRow[gIdx] !== undefined && curRow[gIdx] !== '') existingGrade = curRow[gIdx];
+        if (fIdx >= 0 && curRow[fIdx] !== undefined) existingFeedback = curRow[fIdx];
+        if (gaIdx >= 0 && curRow[gaIdx] !== undefined) existingGradedAt = curRow[gaIdx];
+        if (idIdx >= 0 && curRow[idIdx]) existingId = curRow[idIdx];
+      }
+
       const rowData = [
-        data.studentId, 
-        data.materialId, 
-        data.link, 
-        data.fileName || '', 
-        data.fileSize || '', 
-        new Date().toISOString()
+        existingId,
+        data.studentId || '',
+        data.studentName || '',
+        data.studentNisn || '',
+        data.studentClass || '',
+        data.materialId || '',
+        data.materialTitle || '',
+        data.subject || '',
+        data.link || '',
+        data.fileName || '',
+        data.fileSize || 0,
+        data.submittedAt || new Date().toISOString(),
+        data.grade !== undefined && data.grade !== null && data.grade !== '' ? data.grade : existingGrade,
+        data.feedback !== undefined && data.feedback !== null ? data.feedback : existingFeedback,
+        data.gradedAt || existingGradedAt
       ];
       if (rowIdx > -1) {
         asgSheet.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
       } else {
         asgSheet.appendRow(rowData);
       }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Tugas siswa berhasil disimpan di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
+    }
+    else if (action === 'gradeAssignment') {
+      const asgHeaders = ['id', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'materialId', 'materialTitle', 'subject', 'link', 'fileName', 'fileSize', 'submittedAt', 'grade', 'feedback', 'gradedAt'];
+      const asgSheet = getOrCreateSheet(ss, 'Assignments', asgHeaders);
+      const rowIdx = findAssignmentRow(asgSheet, data.studentId, data.materialId, data.id);
+      if (rowIdx > -1) {
+        const headers = asgSheet.getRange(1, 1, 1, asgSheet.getLastColumn()).getValues()[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        const gIdx = headers.indexOf('grade');
+        const fIdx = headers.indexOf('feedback');
+        const gaIdx = headers.indexOf('gradedat');
+        if (gIdx >= 0 && data.grade !== undefined) asgSheet.getRange(rowIdx, gIdx + 1).setValue(Number(data.grade));
+        if (fIdx >= 0 && data.feedback !== undefined) asgSheet.getRange(rowIdx, fIdx + 1).setValue(String(data.feedback || ''));
+        if (gaIdx >= 0) asgSheet.getRange(rowIdx, gaIdx + 1).setValue(data.gradedAt || new Date().toISOString());
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Nilai tugas siswa berhasil diperbarui di Google Sheet' })).setMimeType(ContentService.MimeType.JSON);
     }
     else if (action === 'markMaterialAsRead') {
       getOrCreateSheet(ss, 'StudentProgress', ['studentId', 'materialId', 'readAt'])
         .appendRow([data.studentId, data.materialId, new Date().toISOString()]);
-    }
-    else if (action === 'markMaterialAsRead') {
-      getOrCreateSheet(ss, 'StudentProgress', ['studentId', 'materialId', 'readAt'])
-        .appendRow([data.studentId, data.materialId, new Date().toISOString()]);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Progress materi diperbarui' })).setMimeType(ContentService.MimeType.JSON);
     }
     
     // Ambil Seluruh Data Pengguna (Untuk Browser Baru / Sinkronisasi Offline)
@@ -838,28 +1214,55 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: true, users: usersList })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Ambil Seluruh Data Sistem (Users, Quizzes, Questions, Materials)
+    // Ambil Seluruh Data Sistem (Users, Quizzes, Questions, Materials, Results)
     else if (action === 'getAllData') {
       // 1. Users
       const userSheet = ss.getSheetByName('Users');
       const usersList = [];
       if (userSheet && userSheet.getLastRow() > 1) {
         const rows = userSheet.getDataRange().getValues();
+        const headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); });
+        const idCol = headers.indexOf('id');
+        const roleCol = headers.indexOf('role');
+        const nameCol = headers.indexOf('name') >= 0 ? headers.indexOf('name') : headers.indexOf('nama');
+        const genderCol = headers.indexOf('gender') >= 0 ? headers.indexOf('gender') : (headers.indexOf('jk') >= 0 ? headers.indexOf('jk') : headers.indexOf('jeniskelamin'));
+        const subCol = headers.indexOf('subject') >= 0 ? headers.indexOf('subject') : headers.indexOf('mapel');
+        const userCol = headers.indexOf('username');
+        const nikCol = headers.indexOf('nik');
+        const nisnCol = headers.indexOf('nisn');
+        const classCol = headers.indexOf('classid') >= 0 ? headers.indexOf('classid') : headers.indexOf('kelas');
+        const assignedCol = headers.indexOf('assignedclasses') >= 0 ? headers.indexOf('assignedclasses') : headers.indexOf('kelasmengajar');
+        let passCol = headers.indexOf('password');
+        if (passCol < 0) passCol = headers.indexOf('katasandi');
+        if (passCol < 0) passCol = headers.indexOf('pass');
+
         for (let i = 1; i < rows.length; i++) {
-          const [id, rRole, name, gender, subject, username, nik, nisn, classId, assignedClasses, pass] = rows[i];
+          const row = rows[i];
+          const id = idCol >= 0 && row[idCol] ? String(row[idCol]).trim() : String(row[0] || '').trim();
           if (id) {
+            const rRole = roleCol >= 0 && row[roleCol] ? String(row[roleCol]).trim() : String(row[1] || 'STUDENT').trim();
+            const name = nameCol >= 0 && row[nameCol] ? String(row[nameCol]).trim() : String(row[2] || '').trim();
+            const gender = genderCol >= 0 && row[genderCol] ? String(row[genderCol]).trim() : String(row[3] || 'L').trim();
+            const subject = subCol >= 0 && row[subCol] ? String(row[subCol]).trim() : String(row[4] || '').trim();
+            const username = userCol >= 0 && row[userCol] ? String(row[userCol]).trim() : String(row[5] || '').trim();
+            const nik = nikCol >= 0 && row[nikCol] ? String(row[nikCol]).trim() : String(row[6] || '').trim();
+            const nisn = nisnCol >= 0 && row[nisnCol] ? String(row[nisnCol]).trim() : String(row[7] || '').trim();
+            const classId = classCol >= 0 && row[classCol] ? String(row[classCol]).trim() : String(row[8] || '').trim();
+            const assigned = assignedCol >= 0 && row[assignedCol] ? row[assignedCol] : (row[9] || '');
+            const pass = passCol >= 0 && row[passCol] !== undefined ? String(row[passCol]).trim() : (row[10] ? String(row[10]).trim() : '');
+
             usersList.push({
-              id: String(id),
+              id: id,
               role: rRole || 'STUDENT',
-              name: String(name || ''),
+              name: name,
               gender: gender || 'L',
-              subject: subject || '',
-              username: String(username || ''),
-              nik: String(nik || ''),
-              nisn: String(nisn || ''),
-              classId: String(classId || ''),
-              assignedClasses: assignedClasses ? String(assignedClasses).split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [],
-              password: String(pass || '')
+              subject: subject,
+              username: username,
+              nik: nik,
+              nisn: nisn,
+              classId: classId,
+              assignedClasses: assigned ? String(assigned).split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [],
+              password: pass
             });
           }
         }
@@ -870,23 +1273,95 @@ function doPost(e) {
       const questionsByQuiz = {};
       if (qqSheet && qqSheet.getLastRow() > 1) {
         const qRows = qqSheet.getDataRange().getValues();
+        const qqHeaders = qRows[0].map(function(h) { return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); });
+        const qIdCol = qqHeaders.indexOf('id');
+        const quizIdCol = qqHeaders.indexOf('quizid') >= 0 ? qqHeaders.indexOf('quizid') : qqHeaders.indexOf('idkuis');
+        const textCol = qqHeaders.indexOf('text') >= 0 ? qqHeaders.indexOf('text') : (qqHeaders.indexOf('soal') >= 0 ? qqHeaders.indexOf('soal') : qqHeaders.indexOf('tekssoal'));
+        const typeCol = qqHeaders.indexOf('type') >= 0 ? qqHeaders.indexOf('type') : (qqHeaders.indexOf('jenissoal') >= 0 ? qqHeaders.indexOf('jenissoal') : qqHeaders.indexOf('tipe'));
+        const optACol = qqHeaders.indexOf('optiona') >= 0 ? qqHeaders.indexOf('optiona') : (qqHeaders.indexOf('opsia') >= 0 ? qqHeaders.indexOf('opsia') : qqHeaders.indexOf('pilihana'));
+        const optBCol = qqHeaders.indexOf('optionb') >= 0 ? qqHeaders.indexOf('optionb') : (qqHeaders.indexOf('opsib') >= 0 ? qqHeaders.indexOf('opsib') : qqHeaders.indexOf('pilihanb'));
+        const optCCol = qqHeaders.indexOf('optionc') >= 0 ? qqHeaders.indexOf('optionc') : (qqHeaders.indexOf('opsic') >= 0 ? qqHeaders.indexOf('opsic') : qqHeaders.indexOf('pilihanc'));
+        const optDCol = qqHeaders.indexOf('optiond') >= 0 ? qqHeaders.indexOf('optiond') : (qqHeaders.indexOf('opsid') >= 0 ? qqHeaders.indexOf('opsid') : qqHeaders.indexOf('pilihand'));
+        const optECol = qqHeaders.indexOf('optione') >= 0 ? qqHeaders.indexOf('optione') : (qqHeaders.indexOf('opsie') >= 0 ? qqHeaders.indexOf('opsie') : qqHeaders.indexOf('pilihane'));
+        const corIdxCol = qqHeaders.indexOf('correctoptionindex') >= 0 ? qqHeaders.indexOf('correctoptionindex') : qqHeaders.indexOf('kunci');
+        const corIndicesCol = qqHeaders.indexOf('correctoptionindices') >= 0 ? qqHeaders.indexOf('correctoptionindices') : qqHeaders.indexOf('kuncikompleks');
+        const sampleAnsCol = qqHeaders.indexOf('sampleanswer') >= 0 ? qqHeaders.indexOf('sampleanswer') : (qqHeaders.indexOf('kunciessai') >= 0 ? qqHeaders.indexOf('kunciessai') : qqHeaders.indexOf('rubrik'));
+        const optImgsCol = qqHeaders.indexOf('optionimagesjson') >= 0 ? qqHeaders.indexOf('optionimagesjson') : qqHeaders.indexOf('gambarpilihan');
+        const ptsCol = qqHeaders.indexOf('points') >= 0 ? qqHeaders.indexOf('points') : (qqHeaders.indexOf('poin') >= 0 ? qqHeaders.indexOf('poin') : qqHeaders.indexOf('bobot'));
+        const imgCol = qqHeaders.indexOf('imageurl') >= 0 ? qqHeaders.indexOf('imageurl') : qqHeaders.indexOf('linkgambar');
+        const vidCol = qqHeaders.indexOf('videourl') >= 0 ? qqHeaders.indexOf('videourl') : qqHeaders.indexOf('linkvideo');
+        const audCol = qqHeaders.indexOf('audiourl') >= 0 ? qqHeaders.indexOf('audiourl') : qqHeaders.indexOf('linkaudio');
+        const expCol = qqHeaders.indexOf('explanation') >= 0 ? qqHeaders.indexOf('explanation') : qqHeaders.indexOf('pembahasan');
+
         for (let i = 1; i < qRows.length; i++) {
-          const [qId, quizId, qTitle, qNum, qText, optA, optB, optC, optD, optE, correctIdx, points, imgUrl, vidUrl, audUrl, exp] = qRows[i];
+          const row = qRows[i];
+          const quizId = quizIdCol >= 0 && row[quizIdCol] ? String(row[quizIdCol]).trim() : String(row[1] || '').trim();
           if (quizId) {
             if (!questionsByQuiz[quizId]) questionsByQuiz[quizId] = [];
+            const optA = optACol >= 0 ? row[optACol] : row[5];
+            const optB = optBCol >= 0 ? row[optBCol] : row[6];
+            const optC = optCCol >= 0 ? row[optCCol] : row[7];
+            const optD = optDCol >= 0 ? row[optDCol] : row[8];
+            const optE = optECol >= 0 ? row[optECol] : row[9];
             const opts = [optA, optB, optC, optD];
             if (optE) opts.push(optE);
-            questionsByQuiz[quizId].push({
-              id: String(qId),
-              text: String(qText || ''),
-              options: opts.map(String),
-              correctOptionIndex: Number(correctIdx) || 0,
-              points: Number(points) || 10,
-              imageUrl: imgUrl ? String(imgUrl) : undefined,
-              videoUrl: vidUrl ? String(vidUrl) : undefined,
-              audioUrl: audUrl ? String(audUrl) : undefined,
-              explanation: exp ? String(exp) : undefined
-            });
+
+            let parsedType = typeCol >= 0 && row[typeCol] ? String(row[typeCol]).toUpperCase().trim() : '';
+            let parsedCorrectIndices = [];
+            const rawCorIndices = corIndicesCol >= 0 ? row[corIndicesCol] : '';
+            if (rawCorIndices !== undefined && rawCorIndices !== null && String(rawCorIndices).trim() !== '') {
+              try {
+                const ci = typeof rawCorIndices === 'string' ? JSON.parse(rawCorIndices) : rawCorIndices;
+                if (Array.isArray(ci)) parsedCorrectIndices = ci.map(Number);
+              } catch (e) {
+                // If stored as "0, 1, 2" or "A, B, C" or "0,2"
+                const str = String(rawCorIndices).replace(/[\[\]]/g, '').trim();
+                if (str) {
+                  const parts = str.split(/[,;\s]+/).filter(Boolean);
+                  parsedCorrectIndices = parts.map(function(p) {
+                    const upper = p.trim().toUpperCase();
+                    if (/^[A-E]$/.test(upper)) return upper.charCodeAt(0) - 65;
+                    const num = parseInt(p.trim(), 10);
+                    return isNaN(num) ? 0 : num;
+                  });
+                }
+              }
+            }
+
+            let parsedOptionImages = [];
+            if (optImgsCol >= 0 && row[optImgsCol]) {
+              try {
+                const oi = typeof row[optImgsCol] === 'string' ? JSON.parse(row[optImgsCol]) : row[optImgsCol];
+                if (Array.isArray(oi)) parsedOptionImages = oi.map(String);
+              } catch (e) {}
+            }
+
+            const sampleAns = sampleAnsCol >= 0 && row[sampleAnsCol] ? String(row[sampleAnsCol]) : undefined;
+            if (parsedCorrectIndices.length > 1 || parsedType === 'MCMA' || parsedType === 'KOMPLEKS' || parsedType === 'PGK') {
+              parsedType = 'MCMA';
+            } else if (sampleAns || parsedType === 'ESSAY' || parsedType === 'URAIAN') {
+              parsedType = 'ESSAY';
+            } else {
+              parsedType = 'SINGLE';
+            }
+
+            const qObj = {
+              id: qIdCol >= 0 && row[qIdCol] ? String(row[qIdCol]) : String(row[0] || ('q-' + i)),
+              text: textCol >= 0 && row[textCol] ? String(row[textCol]) : String(row[4] || ''),
+              type: parsedType,
+              options: parsedType === 'ESSAY' ? [] : opts.map(String),
+              correctOptionIndex: corIdxCol >= 0 && !isNaN(Number(row[corIdxCol])) ? Number(row[corIdxCol]) : (Number(row[10]) || 0),
+              points: ptsCol >= 0 && !isNaN(Number(row[ptsCol])) ? Number(row[ptsCol]) : (Number(row[11]) || 10),
+              imageUrl: (imgCol >= 0 && row[imgCol]) ? String(row[imgCol]) : (row[12] ? String(row[12]) : undefined),
+              videoUrl: (vidCol >= 0 && row[vidCol]) ? String(row[vidCol]) : (row[13] ? String(row[13]) : undefined),
+              audioUrl: (audCol >= 0 && row[audCol]) ? String(row[audCol]) : (row[14] ? String(row[14]) : undefined),
+              explanation: (expCol >= 0 && row[expCol]) ? String(row[expCol]) : (row[15] ? String(row[15]) : undefined)
+            };
+            if (parsedCorrectIndices.length > 0) qObj.correctOptionIndices = parsedCorrectIndices;
+            if (sampleAns) qObj.sampleAnswer = sampleAns;
+            if (parsedOptionImages.length > 0) qObj.optionImages = parsedOptionImages;
+
+            questionsByQuiz[quizId].push(qObj);
           }
         }
       }
@@ -896,25 +1371,107 @@ function doPost(e) {
       const quizzesList = [];
       if (quizSheet && quizSheet.getLastRow() > 1) {
         const qzRows = quizSheet.getDataRange().getValues();
+        const headers = qzRows[0].map(function(h) { return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); });
+        const idCol = headers.indexOf('id');
+        const matCol = headers.indexOf('materialid');
+        const clsCol = headers.indexOf('classid') >= 0 ? headers.indexOf('classid') : headers.indexOf('kelas');
+        const subCol = headers.indexOf('subjectid') >= 0 ? headers.indexOf('subjectid') : headers.indexOf('mapel');
+        const titleCol = headers.indexOf('title') >= 0 ? headers.indexOf('title') : headers.indexOf('judul');
+        const durCol = headers.indexOf('durationminutes') >= 0 ? headers.indexOf('durationminutes') : headers.indexOf('durasi');
+        const schedCol = headers.indexOf('isscheduled') >= 0 ? headers.indexOf('isscheduled') : headers.indexOf('terjadwal');
+        const startCol = headers.indexOf('starttime') >= 0 ? headers.indexOf('starttime') : headers.indexOf('waktumulai');
+        const endCol = headers.indexOf('endtime') >= 0 ? headers.indexOf('endtime') : headers.indexOf('waktuselesai');
+        const qJsonCol = headers.indexOf('questionsjson');
+        const crCol = headers.indexOf('createdat');
+
         for (let i = 1; i < qzRows.length; i++) {
-          const [id, materialId, classId, subjectId, title, durationMinutes, isScheduled, startTime, endTime, totalQuestions, questionsJson, createdAt] = qzRows[i];
+          const row = qzRows[i];
+          const id = idCol >= 0 && row[idCol] ? String(row[idCol]).trim() : String(row[0] || '').trim();
           if (id) {
-            let questions = questionsByQuiz[id] || [];
-            if (questions.length === 0 && questionsJson) {
-              try { questions = JSON.parse(questionsJson); } catch (e) {}
+            const rawSched = schedCol >= 0 ? row[schedCol] : row[6];
+            const rawStart = startCol >= 0 ? row[startCol] : row[7];
+            const rawEnd = endCol >= 0 ? row[endCol] : row[8];
+            const cleanStart = rawStart ? formatGasDate(rawStart) : '';
+            const cleanEnd = rawEnd ? formatGasDate(rawEnd) : '';
+
+            const rawSchedStr = String(rawSched || '').toUpperCase().trim();
+            const isExplicitFalse = rawSchedStr === 'FALSE' || rawSchedStr === 'TIDAK' || rawSchedStr === 'SALAH' || rawSchedStr === '0';
+            const isExplicitTrue = rawSchedStr === 'TRUE' || rawSchedStr === 'YA' || rawSchedStr === 'BENAR' || rawSchedStr === '1' || rawSched === true;
+
+            const isSched = isExplicitFalse ? false : (isExplicitTrue || Boolean(cleanStart && cleanStart.trim() !== ''));
+
+            let questions = [];
+            // Prioritas 1: Ambil butir soal dari sub-sheet QuizQuestions (paling mutakhir dan lengkap)
+            if (questionsByQuiz[id] && questionsByQuiz[id].length > 0) {
+              questions = questionsByQuiz[id];
+            } else {
+              const rawQJson = qJsonCol >= 0 ? row[qJsonCol] : row[10];
+              if (rawQJson) {
+                try {
+                  const parsed = typeof rawQJson === 'string' ? JSON.parse(rawQJson) : rawQJson;
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    questions = parsed.map(function(q, qIdx) {
+                      const opts = Array.isArray(q.options) ? q.options : [];
+                      const optImgs = Array.isArray(q.optionImages) ? q.optionImages : [];
+                      const rawCi = q.correctOptionIndices;
+                      let corIndices = [];
+                      if (Array.isArray(rawCi)) {
+                        corIndices = rawCi.map(Number);
+                      } else if (typeof rawCi === 'string' && rawCi.trim()) {
+                        try {
+                          const p = JSON.parse(rawCi);
+                          if (Array.isArray(p)) corIndices = p.map(Number);
+                        } catch (e) {
+                          const parts = rawCi.replace(/[\[\]]/g, '').split(/[,;\s]+/).filter(Boolean);
+                          corIndices = parts.map(function(x) {
+                            const u = x.trim().toUpperCase();
+                            if (/^[A-E]$/.test(u)) return u.charCodeAt(0) - 65;
+                            const n = parseInt(x.trim(), 10);
+                            return isNaN(n) ? 0 : n;
+                          });
+                        }
+                      }
+                      const sAns = q.sampleAnswer || '';
+                      const hasOptText = opts.some(function(o) { return String(o || '').trim() !== ''; });
+                      const hasOptImg = optImgs.some(function(img) { return String(img || '').trim() !== ''; });
+                      const infType = (sAns && String(sAns).trim() !== '') || (!hasOptText && !hasOptImg)
+                        ? 'ESSAY'
+                        : (corIndices.length > 1 || q.type === 'MCMA' || q.type === 'KOMPLEKS' || q.type === 'PGK')
+                        ? 'MCMA'
+                        : (q.type || 'SINGLE');
+                      return {
+                        id: q.id || ('q-' + (qIdx + 1)),
+                        text: q.text || '',
+                        type: infType,
+                        options: infType === 'ESSAY' ? [] : opts,
+                        optionImages: infType === 'ESSAY' ? [] : optImgs,
+                        correctOptionIndex: q.correctOptionIndex !== undefined ? q.correctOptionIndex : 0,
+                        correctOptionIndices: corIndices,
+                        sampleAnswer: sAns,
+                        points: q.points !== undefined ? Number(q.points) : 10,
+                        imageUrl: q.imageUrl || undefined,
+                        videoUrl: q.videoUrl || undefined,
+                        audioUrl: q.audioUrl || undefined,
+                        explanation: q.explanation || undefined
+                      };
+                    });
+                  }
+                } catch (e) {}
+              }
             }
+
             quizzesList.push({
-              id: String(id),
-              materialId: String(materialId || ''),
-              classId: String(classId || ''),
-              subjectId: String(subjectId || ''),
-              title: String(title || ''),
-              durationMinutes: Number(durationMinutes) || 45,
-              isScheduled: String(isScheduled).toUpperCase() === 'TRUE',
-              startTime: startTime ? String(startTime) : undefined,
-              endTime: endTime ? String(endTime) : undefined,
+              id: id,
+              materialId: matCol >= 0 && row[matCol] ? String(row[matCol]) : String(row[1] || ''),
+              classId: clsCol >= 0 && row[clsCol] ? String(row[clsCol]) : String(row[2] || ''),
+              subjectId: subCol >= 0 && row[subCol] ? String(row[subCol]) : String(row[3] || ''),
+              title: titleCol >= 0 && row[titleCol] ? String(row[titleCol]) : String(row[4] || ''),
+              durationMinutes: Number(durCol >= 0 ? row[durCol] : row[5]) || 45,
+              isScheduled: isSched,
+              startTime: isSched ? cleanStart : '',
+              endTime: isSched ? cleanEnd : '',
               questions: questions,
-              createdAt: String(createdAt || new Date().toISOString())
+              createdAt: String((crCol >= 0 ? row[crCol] : row[11]) || new Date().toISOString())
             });
           }
         }
@@ -925,26 +1482,57 @@ function doPost(e) {
       const materialsList = [];
       if (matSheet && matSheet.getLastRow() > 1) {
         const mRows = matSheet.getDataRange().getValues();
+        const headers = mRows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        const idCol = headers.indexOf('id');
+        const cidCol = headers.indexOf('classid');
+        const tcCol = headers.indexOf('targetclasses');
+        const subCol = headers.indexOf('subjectid');
+        const tidCol = headers.indexOf('teacherid');
+        const tnameCol = headers.indexOf('teachername');
+        const titleCol = headers.indexOf('title');
+        const contentCol = headers.indexOf('content');
+        const typeCol = headers.indexOf('type');
+        const urlCol = headers.indexOf('url');
+        const chCol = headers.indexOf('chapter');
+        const ordCol = headers.indexOf('order');
+        const semCol = headers.indexOf('semester');
+        const crCol = headers.indexOf('createdat');
+        const hasAsgCol = headers.indexOf('hasassignment');
+        const asgTitleCol = headers.indexOf('assignmenttitle');
+        const asgInstCol = headers.indexOf('assignmentinstructions');
+        const asgDueCol = headers.indexOf('assignmentduedate');
+
         for (let i = 1; i < mRows.length; i++) {
-          const [id, classId, subjectId, teacherId, title, content, type, url, chapter, order, semester, createdAt, hasAssignment, assignmentTitle, assignmentInstructions, assignmentDueDate] = mRows[i];
-          if (id) {
+          const row = mRows[i];
+          const mId = idCol >= 0 ? String(row[idCol] || '') : String(row[0] || '');
+          if (mId) {
+            const rawUrl = urlCol >= 0 ? String(row[urlCol] || '') : String(row[7] || '');
+            const rawType = (typeCol >= 0 && row[typeCol]) ? String(row[typeCol]) : 'LINK';
+            const rawHasAsg = hasAsgCol >= 0 ? String(row[hasAsgCol]).toUpperCase() === 'TRUE' : String(row[12]).toUpperCase() === 'TRUE';
+            const rawTargetClasses = tcCol >= 0 && row[tcCol] ? String(row[tcCol]).split(',').map(function(s) { return s.trim(); }).filter(Boolean) : undefined;
+            const cid = cidCol >= 0 ? String(row[cidCol] || '') : String(row[1] || '');
+
             materialsList.push({
-              id: String(id),
-              classId: String(classId || ''),
-              subjectId: String(subjectId || ''),
-              teacherId: String(teacherId || ''),
-              title: String(title || ''),
-              content: String(content || ''),
-              type: type || 'LINK',
-              linkUrl: url ? String(url) : undefined,
-              chapter: String(chapter || ''),
-              order: Number(order) || 1,
-              semester: Number(semester) || 1,
-              createdAt: String(createdAt || new Date().toISOString()),
-              hasAssignment: String(hasAssignment).toUpperCase() === 'TRUE',
-              assignmentTitle: assignmentTitle ? String(assignmentTitle) : undefined,
-              assignmentInstructions: assignmentInstructions ? String(assignmentInstructions) : undefined,
-              assignmentDueDate: assignmentDueDate ? String(assignmentDueDate) : undefined
+              id: mId,
+              classId: cid,
+              targetClasses: rawTargetClasses || (cid ? cid.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : undefined),
+              subjectId: subCol >= 0 ? String(row[subCol] || '') : String(row[2] || ''),
+              teacherId: tidCol >= 0 ? String(row[tidCol] || '') : String(row[3] || ''),
+              teacherName: tnameCol >= 0 && row[tnameCol] ? String(row[tnameCol]) : undefined,
+              title: titleCol >= 0 ? String(row[titleCol] || '') : String(row[4] || ''),
+              content: contentCol >= 0 ? String(row[contentCol] || '') : String(row[5] || ''),
+              type: rawType,
+              linkUrl: rawType === 'LINK' ? rawUrl : undefined,
+              pdfUrl: rawType === 'PDF' ? rawUrl : undefined,
+              youtubeUrl: rawType === 'VIDEO' ? rawUrl : undefined,
+              chapter: chCol >= 0 ? String(row[chCol] || '') : String(row[8] || ''),
+              order: ordCol >= 0 ? Number(row[ordCol]) || 1 : Number(row[9]) || 1,
+              semester: semCol >= 0 ? Number(row[semCol]) || 1 : Number(row[10]) || 1,
+              createdAt: crCol >= 0 && row[crCol] ? String(row[crCol]) : (row[11] ? String(row[11]) : new Date().toISOString()),
+              hasAssignment: rawHasAsg,
+              assignmentTitle: asgTitleCol >= 0 && row[asgTitleCol] ? String(row[asgTitleCol]) : (row[13] ? String(row[13]) : undefined),
+              assignmentInstructions: asgInstCol >= 0 && row[asgInstCol] ? String(row[asgInstCol]) : (row[14] ? String(row[14]) : undefined),
+              assignmentDueDate: asgDueCol >= 0 && row[asgDueCol] ? String(row[asgDueCol]) : (row[15] ? String(row[15]) : undefined)
             });
           }
         }
@@ -955,20 +1543,63 @@ function doPost(e) {
       const quizResultsList = [];
       if (qrSheet && qrSheet.getLastRow() > 1) {
         const qrRows = qrSheet.getDataRange().getValues();
+        const headers = qrRows[0].map(function(h) { return String(h || '').trim().toLowerCase().replace(/[\s_\-]/g, ''); });
+        const idCol = headers.indexOf('id');
+        const qidCol = headers.indexOf('quizid') >= 0 ? headers.indexOf('quizid') : headers.indexOf('idkuis');
+        const qtitleCol = headers.indexOf('quiztitle') >= 0 ? headers.indexOf('quiztitle') : headers.indexOf('judulkuis');
+        const subjCol = headers.indexOf('subject') >= 0 ? headers.indexOf('subject') : headers.indexOf('mapel');
+        const sidCol = headers.indexOf('studentid') >= 0 ? headers.indexOf('studentid') : headers.indexOf('idsiswa');
+        const snameCol = headers.indexOf('studentname') >= 0 ? headers.indexOf('studentname') : (headers.indexOf('nama') >= 0 ? headers.indexOf('nama') : headers.indexOf('namasiswa'));
+        const snisnCol = headers.indexOf('studentnisn') >= 0 ? headers.indexOf('studentnisn') : headers.indexOf('nisn');
+        const sclassCol = headers.indexOf('studentclass') >= 0 ? headers.indexOf('studentclass') : headers.indexOf('kelas');
+        const scoreCol = headers.indexOf('score') >= 0 ? headers.indexOf('score') : headers.indexOf('nilai');
+        const fscoreCol = headers.indexOf('finalscore') >= 0 ? headers.indexOf('finalscore') : headers.indexOf('nilaiakhir');
+        const violCol = headers.indexOf('violationscount') >= 0 ? headers.indexOf('violationscount') : headers.indexOf('pelanggaran');
+        const ansCol = headers.indexOf('answersjson') >= 0 ? headers.indexOf('answersjson') : headers.indexOf('jawaban');
+        const subAtCol = headers.indexOf('submittedat') >= 0 ? headers.indexOf('submittedat') : headers.indexOf('waktusubmit');
+        const disqCol = headers.indexOf('disqualified') >= 0 ? headers.indexOf('disqualified') : headers.indexOf('didiskualifikasi');
+        const noteCol = headers.indexOf('teachernote') >= 0 ? headers.indexOf('teachernote') : headers.indexOf('catatan');
+        const essayCol = headers.indexOf('essayscoresjson') >= 0 ? headers.indexOf('essayscoresjson') : (headers.indexOf('nilaiessai') >= 0 ? headers.indexOf('nilaiessai') : headers.indexOf('essayscores'));
+
         for (let i = 1; i < qrRows.length; i++) {
-          const [id, quizId, studentId, score, finalScore, violationsCount, answersJson, submittedAt] = qrRows[i];
-          if (id) {
+          const row = qrRows[i];
+          const id = idCol >= 0 && row[idCol] ? String(row[idCol]) : String(row[0] || '');
+          const quizId = qidCol >= 0 && row[qidCol] ? String(row[qidCol]) : String(row[1] || '');
+          const studentId = sidCol >= 0 && row[sidCol] ? String(row[sidCol]) : (snisnCol >= 0 && row[snisnCol] ? String(row[snisnCol]) : String(row[4] || ''));
+          if (quizId && (studentId || id)) {
             let parsedAnswers = {};
-            try { parsedAnswers = JSON.parse(answersJson); } catch (e) {}
+            const rawAns = ansCol >= 0 ? row[ansCol] : '';
+            if (rawAns) {
+              try { parsedAnswers = typeof rawAns === 'string' ? JSON.parse(rawAns) : rawAns; } catch (e) {}
+            }
+            let parsedEssayScores = {};
+            const rawEssay = essayCol >= 0 ? row[essayCol] : '';
+            if (rawEssay) {
+              try { parsedEssayScores = typeof rawEssay === 'string' ? JSON.parse(rawEssay) : rawEssay; } catch (e) {}
+            }
+            const rawScore = scoreCol >= 0 ? row[scoreCol] : row[8];
+            const rawFscore = fscoreCol >= 0 ? row[fscoreCol] : row[9];
+            const sc = (rawScore !== '' && rawScore !== null && !isNaN(Number(rawScore))) ? Number(rawScore) : 0;
+            const fsc = (rawFscore !== '' && rawFscore !== null && !isNaN(Number(rawFscore))) ? Number(rawFscore) : sc;
+            const isDisq = disqCol >= 0 ? (String(row[disqCol]).toUpperCase() === 'YA' || String(row[disqCol]).toUpperCase() === 'TRUE') : false;
+
             quizResultsList.push({
-              id: String(id),
-              quizId: String(quizId || ''),
-              studentId: String(studentId || ''),
-              score: Number(score) || 0,
-              finalScore: finalScore !== undefined ? Number(finalScore) : Number(score) || 0,
-              violationsCount: Number(violationsCount) || 0,
+              id: id || ('qr-' + quizId + '-' + studentId),
+              quizId: String(quizId),
+              quizTitle: qtitleCol >= 0 && row[qtitleCol] ? String(row[qtitleCol]) : undefined,
+              subject: subjCol >= 0 && row[subjCol] ? String(row[subjCol]) : undefined,
+              studentId: String(studentId),
+              studentName: snameCol >= 0 && row[snameCol] ? String(row[snameCol]) : undefined,
+              studentNisn: snisnCol >= 0 && row[snisnCol] ? String(row[snisnCol]) : undefined,
+              studentClass: sclassCol >= 0 && row[sclassCol] ? String(row[sclassCol]) : undefined,
+              score: sc,
+              finalScore: fsc,
+              violationsCount: violCol >= 0 && !isNaN(Number(row[violCol])) ? Number(row[violCol]) : 0,
               answers: parsedAnswers,
-              submittedAt: String(submittedAt || new Date().toISOString())
+              essayScores: parsedEssayScores,
+              submittedAt: subAtCol >= 0 && row[subAtCol] ? String(row[subAtCol]) : new Date().toISOString(),
+              disqualified: isDisq,
+              teacherNote: noteCol >= 0 && row[noteCol] ? String(row[noteCol]) : undefined
             });
           }
         }
@@ -979,14 +1610,45 @@ function doPost(e) {
       const assignmentsList = [];
       if (asgSheet && asgSheet.getLastRow() > 1) {
         const asgRows = asgSheet.getDataRange().getValues();
+        const headers = asgRows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        const idCol = headers.indexOf('id');
+        const sidCol = headers.indexOf('studentid');
+        const snameCol = headers.indexOf('studentname');
+        const snisnCol = headers.indexOf('studentnisn');
+        const sclassCol = headers.indexOf('studentclass');
+        const midCol = headers.indexOf('materialid');
+        const mtitleCol = headers.indexOf('materialtitle');
+        const subjCol = headers.indexOf('subject');
+        const linkCol = headers.indexOf('link');
+        const fileCol = headers.indexOf('filename');
+        const sizeCol = headers.indexOf('filesize');
+        const subAtCol = headers.indexOf('submittedat');
+        const gradeCol = headers.indexOf('grade');
+        const feedCol = headers.indexOf('feedback');
+        const gradedAtCol = headers.indexOf('gradedat');
+
         for (let i = 1; i < asgRows.length; i++) {
-          const [studentId, materialId, link, submittedAt] = asgRows[i];
-          if (studentId) {
+          const row = asgRows[i];
+          const studentId = sidCol >= 0 ? String(row[sidCol] || '') : String(row[0] || '');
+          const materialId = midCol >= 0 ? String(row[midCol] || '') : String(row[1] || '');
+          if (studentId && materialId) {
+            const rawGrade = gradeCol >= 0 ? row[gradeCol] : '';
             assignmentsList.push({
+              id: idCol >= 0 && row[idCol] ? String(row[idCol]) : ('asg-' + studentId + '-' + materialId),
               studentId: String(studentId),
-              materialId: String(materialId || ''),
-              link: String(link || ''),
-              submittedAt: String(submittedAt || new Date().toISOString())
+              studentName: snameCol >= 0 && row[snameCol] ? String(row[snameCol]) : undefined,
+              studentNisn: snisnCol >= 0 && row[snisnCol] ? String(row[snisnCol]) : undefined,
+              studentClass: sclassCol >= 0 && row[sclassCol] ? String(row[sclassCol]) : undefined,
+              materialId: String(materialId),
+              materialTitle: mtitleCol >= 0 && row[mtitleCol] ? String(row[mtitleCol]) : undefined,
+              subject: subjCol >= 0 && row[subjCol] ? String(row[subjCol]) : undefined,
+              link: linkCol >= 0 ? String(row[linkCol] || '') : String(row[2] || ''),
+              fileName: fileCol >= 0 && row[fileCol] ? String(row[fileCol]) : undefined,
+              fileSize: sizeCol >= 0 && Number(row[sizeCol]) ? Number(row[sizeCol]) : undefined,
+              submittedAt: subAtCol >= 0 && row[subAtCol] ? String(row[subAtCol]) : (row[3] ? String(row[3]) : new Date().toISOString()),
+              grade: rawGrade !== '' && rawGrade !== null && !isNaN(Number(rawGrade)) ? Number(rawGrade) : undefined,
+              feedback: feedCol >= 0 && row[feedCol] ? String(row[feedCol]) : undefined,
+              gradedAt: gradedAtCol >= 0 && row[gradedAtCol] ? String(row[gradedAtCol]) : undefined
             });
           }
         }
@@ -1037,36 +1699,40 @@ function doPost(e) {
         if (qSheet.getLastRow() > 1) {
           qSheet.deleteRows(2, qSheet.getLastRow() - 1);
         }
-        const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt']);
+        const qqSheet = getOrCreateSheet(ss, 'QuizQuestions', ['id', 'quizId', 'quizTitle', 'questionNumber', 'text', 'type', 'optionA', 'optionB', 'optionC', 'optionD', 'optionE', 'correctOptionIndex', 'correctOptionIndices', 'sampleAnswer', 'optionImagesJson', 'points', 'imageUrl', 'videoUrl', 'audioUrl', 'explanation', 'createdAt']);
         if (qqSheet.getLastRow() > 1) {
           qqSheet.deleteRows(2, qqSheet.getLastRow() - 1);
         }
         data.quizzes.forEach(function(quiz) {
-          saveOrUpdateQuiz(ss, quiz);
+          saveOrUpdateQuiz(ss, quiz, true);
         });
       }
       // 3. Materials
       if (data.materials && Array.isArray(data.materials)) {
-        const mSheet = getOrCreateSheet(ss, 'Materials', ['id', 'classId', 'subjectId', 'teacherId', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate']);
+        const mHeaders = ['id', 'classId', 'targetClasses', 'subjectId', 'teacherId', 'teacherName', 'title', 'content', 'type', 'url', 'chapter', 'order', 'semester', 'createdAt', 'hasAssignment', 'assignmentTitle', 'assignmentInstructions', 'assignmentDueDate'];
+        const mSheet = getOrCreateSheet(ss, 'Materials', mHeaders);
         if (mSheet.getLastRow() > 1) {
           mSheet.deleteRows(2, mSheet.getLastRow() - 1);
         }
         if (data.materials.length > 0) {
           const matRows = data.materials.map(function(m) {
             const url = m.pdfUrl || m.youtubeUrl || m.linkUrl || '';
+            const targetClasses = Array.isArray(m.targetClasses) ? m.targetClasses.join(', ') : (m.targetClasses || m.classId || '');
             return [
               m.id,
-              m.classId,
-              m.subjectId,
-              m.teacherId,
-              m.title,
+              m.classId || '',
+              targetClasses,
+              m.subjectId || '',
+              m.teacherId || '',
+              m.teacherName || '',
+              m.title || '',
               m.content || '',
-              m.type,
+              m.type || 'LINK',
               url,
-              m.chapter,
-              m.order,
-              m.semester,
-              m.createdAt,
+              m.chapter || '',
+              m.order || 1,
+              m.semester || 1,
+              m.createdAt || new Date().toISOString(),
               m.hasAssignment ? 'TRUE' : 'FALSE',
               m.assignmentTitle || '',
               m.assignmentInstructions || '',
@@ -1076,41 +1742,101 @@ function doPost(e) {
           mSheet.getRange(2, 1, matRows.length, matRows[0].length).setValues(matRows);
         }
       }
-      // 4. QuizResults
-      if (data.quizResults && Array.isArray(data.quizResults)) {
-        const qrSheet = getOrCreateSheet(ss, 'QuizResults', ['id', 'quizId', 'studentId', 'score', 'finalScore', 'violationsCount', 'answersJson', 'submittedAt']);
-        if (qrSheet.getLastRow() > 1) {
-          qrSheet.deleteRows(2, qrSheet.getLastRow() - 1);
-        }
-        if (data.quizResults.length > 0) {
-          const qrRows = data.quizResults.map(function(r) {
-            return [
-              r.id,
-              r.quizId,
-              r.studentId,
-              r.score,
-              r.finalScore !== undefined ? r.finalScore : r.score,
-              r.violationsCount || 0,
-              JSON.stringify(r.answers || {}),
-              r.submittedAt || new Date().toISOString()
-            ];
+      // 4. QuizResults (Safe Upsert - Nilai ujian siswa TIDAK BOLEH terhapus saat sinkronisasi jadwal atau data lain)
+      if (data.quizResults && Array.isArray(data.quizResults) && data.quizResults.length > 0) {
+        const qrHeaders = ['id', 'quizId', 'quizTitle', 'subject', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'score', 'finalScore', 'violationsCount', 'answersJson', 'essayScoresJson', 'submittedAt', 'disqualified', 'teacherNote'];
+        const qrSheet = getOrCreateSheet(ss, 'QuizResults', qrHeaders);
+        const headers = qrSheet.getRange(1, 1, 1, qrSheet.getLastColumn()).getValues()[0].map(function(h) { return String(h).trim().toLowerCase(); });
+        
+        const qidCol = headers.indexOf('quizid');
+        const sidCol = headers.indexOf('studentid');
+        const nisnCol = headers.indexOf('studentnisn');
+        const idCol = headers.indexOf('id');
+        
+        const lastRow = qrSheet.getLastRow();
+        const existingData = lastRow > 1 ? qrSheet.getRange(2, 1, lastRow - 1, qrSheet.getLastColumn()).getValues() : [];
+        
+        data.quizResults.forEach(function(r) {
+          if (!r || !r.quizId) return;
+          const rId = String(r.id || '').trim();
+          const rQuizId = String(r.quizId || '').trim();
+          const rStudentId = String(r.studentId || '').trim();
+          const rNisn = String(r.studentNisn || '').trim();
+          
+          let targetRowIdx = -1;
+          for (let i = 0; i < existingData.length; i++) {
+            const exId = idCol >= 0 ? String(existingData[i][idCol] || '').trim() : '';
+            const exQid = qidCol >= 0 ? String(existingData[i][qidCol] || '').trim() : '';
+            const exSid = sidCol >= 0 ? String(existingData[i][sidCol] || '').trim() : '';
+            const exNisn = nisnCol >= 0 ? String(existingData[i][nisnCol] || '').trim() : '';
+            
+            if (rId && exId && rId === exId) {
+              targetRowIdx = i + 2;
+              break;
+            }
+            if (exQid === rQuizId && ((rStudentId && exSid === rStudentId) || (rNisn && (exSid === rNisn || exNisn === rNisn)))) {
+              targetRowIdx = i + 2;
+              break;
+            }
+          }
+          
+          const essayVal = r.essayScores ? (typeof r.essayScores === 'string' ? r.essayScores : JSON.stringify(r.essayScores)) : '{}';
+          const valMap = {
+            'id': r.id || ('qr-' + (r.quizId || 'q') + '-' + (r.studentId || 's')),
+            'quizid': r.quizId || '',
+            'quiztitle': r.quizTitle || '',
+            'subject': r.subject || '',
+            'studentid': r.studentId || '',
+            'studentname': r.studentName || '',
+            'studentnisn': r.studentNisn || '',
+            'studentclass': r.studentClass || '',
+            'score': r.score !== undefined ? Number(r.score) : 0,
+            'finalscore': r.finalScore !== undefined ? Number(r.finalScore) : (r.score !== undefined ? Number(r.score) : 0),
+            'violationscount': Number(r.violationsCount || (r.violationLogs ? r.violationLogs.length : 0) || 0),
+            'answersjson': typeof r.answers === 'string' ? r.answers : JSON.stringify(r.answers || {}),
+            'essayscoresjson': essayVal,
+            'nilaiessai': essayVal,
+            'submittedat': r.submittedAt || new Date().toISOString(),
+            'disqualified': r.disqualified ? 'YA' : 'TIDAK',
+            'teachernote': r.teacherNote || ''
+          };
+          const rowVals = headers.map(function(h) {
+            return valMap[h] !== undefined ? valMap[h] : '';
           });
-          qrSheet.getRange(2, 1, qrRows.length, qrRows[0].length).setValues(qrRows);
-        }
+          
+          if (targetRowIdx > -1) {
+            qrSheet.getRange(targetRowIdx, 1, 1, rowVals.length).setValues([rowVals]);
+          } else {
+            qrSheet.appendRow(rowVals);
+            existingData.push(rowVals);
+          }
+        });
       }
       // 5. Assignments
       if (data.assignments && Array.isArray(data.assignments)) {
-        const asgSheet = getOrCreateSheet(ss, 'Assignments', ['studentId', 'materialId', 'link', 'submittedAt']);
+        const asgHeaders = ['id', 'studentId', 'studentName', 'studentNisn', 'studentClass', 'materialId', 'materialTitle', 'subject', 'link', 'fileName', 'fileSize', 'submittedAt', 'grade', 'feedback', 'gradedAt'];
+        const asgSheet = getOrCreateSheet(ss, 'Assignments', asgHeaders);
         if (asgSheet.getLastRow() > 1) {
           asgSheet.deleteRows(2, asgSheet.getLastRow() - 1);
         }
         if (data.assignments.length > 0) {
           const asgRows = data.assignments.map(function(a) {
             return [
-              a.studentId,
-              a.materialId,
-              a.link,
-              a.submittedAt || new Date().toISOString()
+              a.id || ('asg-' + a.studentId + '-' + a.materialId),
+              a.studentId || '',
+              a.studentName || '',
+              a.studentNisn || '',
+              a.studentClass || '',
+              a.materialId || '',
+              a.materialTitle || '',
+              a.subject || '',
+              a.link || '',
+              a.fileName || '',
+              a.fileSize || 0,
+              a.submittedAt || new Date().toISOString(),
+              a.grade !== undefined && a.grade !== null ? a.grade : '',
+              a.feedback || '',
+              a.gradedAt || ''
             ];
           });
           asgSheet.getRange(2, 1, asgRows.length, asgRows[0].length).setValues(asgRows);
@@ -1179,13 +1905,30 @@ function doGet(e) {
 
 export default function GASConfig() {
   const { webhookUrl, setWebhookUrl, testConnection, isConnected, executeAction, lastSyncTime, lastSyncSuccess, lastSyncMessage, fetchServerConfig } = useGasStore();
-  const { users, quizzes, materials, syncAllToGas, pullAllFromGas, pullAllFromServer } = useDataStore();
+  const { users, quizzes, materials, syncAllToGas, pullAllFromGas, pullAllFromServer, cleanInitialSamples } = useDataStore();
   const [url, setUrl] = useState(webhookUrl);
   const [isTesting, setIsTesting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const handleCleanSamples = async () => {
+    if (!isConnected) {
+      toast.error('Webhook Google Sheets belum terhubung.');
+      return;
+    }
+    setIsCleaning(true);
+    try {
+      await cleanInitialSamples();
+      toast.success('Data contoh/mock awal di Google Sheet dan server berhasil dibersihkan!');
+    } catch (err: any) {
+      toast.error('Gagal membersihkan data contoh: ' + (err?.message || err));
+    } finally {
+      setIsCleaning(false);
+    }
+  };
 
   useEffect(() => {
     async function loadServerConfig() {
@@ -1421,6 +2164,17 @@ export default function GASConfig() {
                   >
                     <RefreshCw className={`w-4 h-4 mr-1.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
                     Kirim Semua Data ke Google Sheet
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    size="sm" 
+                    onClick={handleCleanSamples} 
+                    isLoading={isCleaning}
+                    className="border-amber-300 text-amber-800 hover:bg-amber-100 bg-white"
+                    title="Bersihkan data akun contoh, materi contoh, dan kuis contoh dari Google Sheet"
+                  >
+                    <Trash2 className="w-4 h-4 mr-1.5 text-amber-600" />
+                    Bersihkan Data Contoh
                   </Button>
                 </div>
               </div>

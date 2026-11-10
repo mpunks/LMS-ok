@@ -1,6 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BookOpen, KeyRound, User, Lock, RefreshCw, CloudCheck, Info, Database, CheckCircle2, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { 
+  Cpu, 
+  KeyRound, 
+  User, 
+  Lock, 
+  RefreshCw, 
+  Info, 
+  Database, 
+  CheckCircle2, 
+  ShieldCheck, 
+  Terminal, 
+  Sparkles,
+  Code2,
+  Binary,
+  Layers,
+  ChevronRight
+} from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -10,6 +26,7 @@ import { useGasStore } from '@/store/gasStore';
 import { useDataStore } from '@/store/dataStore';
 import { toast } from '@/components/ui/Toast';
 import { PWAInstallButton } from '@/components/common/PWAInstallButton';
+import ConnectDatabaseModal from '@/components/common/ConnectDatabaseModal';
 
 export default function Login() {
   const [searchParams] = useSearchParams();
@@ -20,50 +37,71 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isPullingData, setIsPullingData] = useState(false);
+  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [serverStats, setServerStats] = useState<{ totalUsers: number; isConfigured: boolean } | null>(null);
+
   const navigate = useNavigate();
   const { login } = useAuthStore();
-  const { webhookUrl, executeAction, fetchServerConfig, isConnected, testConnection } = useGasStore();
-  const { users, addUser, pullAllFromGas, pullUsersFromGas, pullAllFromServer } = useDataStore();
+  const { webhookUrl, fetchServerConfig, isConnected, testConnection } = useGasStore();
+  const { users, addUser, pullAllFromServer, pullAllFromGas } = useDataStore();
 
-  useEffect(() => {
-    // Sinkronkan otomatis saat pertama kali web dibuka
-    async function autoSyncOnFirstLoad() {
-      try {
-        await pullAllFromServer().catch(() => {});
-        const serverUrl = await fetchServerConfig().catch(() => '');
-        const activeUrl = (serverUrl || webhookUrl)?.trim();
-
-        if (activeUrl && activeUrl.includes('script.google.com/macros/s/')) {
-          const ok = await testConnection().catch(() => false);
-          if (ok) {
-            await pullAllFromGas().catch(() => {});
-          }
-        } else {
-          // Bila belum terhubung di browser, minta server melakukan sinkronisasi otomatis
-          const res = await fetch('/api/database/sync', { method: 'POST' }).then(r => r.json()).catch(() => null);
-          if (res && res.success) {
-            await pullAllFromServer().catch(() => {});
-            await fetchServerConfig().catch(() => {});
+  const fetchDatabaseStatus = async () => {
+    try {
+      const res = await fetch('/api/database/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setServerStats({
+            totalUsers: data.stats?.totalUsers || 0,
+            isConfigured: Boolean(data.isConfigured)
+          });
+          if (data.webhookUrl && !webhookUrl) {
+            useGasStore.setState({ webhookUrl: data.webhookUrl });
           }
         }
+      }
+    } catch (e) {
+      console.warn('Status check warning:', e);
+    }
+  };
+
+  useEffect(() => {
+    async function autoInit() {
+      try {
+        await fetchDatabaseStatus();
+        await pullAllFromServer().catch(() => {});
+        const sUrl = await fetchServerConfig().catch(() => '');
+        const activeUrl = (sUrl || webhookUrl)?.trim();
+        if (activeUrl && activeUrl.includes('script.google.com/macros/s/')) {
+          await testConnection().catch(() => false);
+        }
       } catch (err) {
-        console.warn('Auto-sync notice on initial boot:', err);
+        console.warn('Auto-init notice:', err);
       }
     }
 
-    autoSyncOnFirstLoad();
+    autoInit();
   }, []);
 
-  const hasConfiguredWebhook = Boolean(webhookUrl && webhookUrl.includes('script.google.com/macros/s/'));
+  const totalUsersAvailable = serverStats?.totalUsers || users.length || 0;
+  const hasConfiguredWebhook = Boolean(
+    (webhookUrl && webhookUrl.includes('script.google.com/macros/s/')) || 
+    serverStats?.isConfigured
+  );
 
   const handleManualPull = async () => {
     setIsPullingData(true);
     try {
-      await fetch('/api/database/sync', { method: 'POST' }).catch(() => {});
+      if (hasConfiguredWebhook) {
+        await fetch('/api/database/sync', { method: 'POST' }).catch(() => {});
+        await pullAllFromGas().catch(() => {});
+      }
+
       await pullAllFromServer().catch(() => {});
-      await pullAllFromGas().catch(() => {});
-      const total = useDataStore.getState().users.length;
-      toast.success(`Berhasil menyinkronkan database! ${total} akun pengguna siap digunakan.`);
+      await fetchDatabaseStatus();
+
+      const latestCount = useDataStore.getState().users.length;
+      toast.success(`Sinkronisasi berhasil! ${latestCount} akun pengguna siap digunakan.`);
     } catch (err: any) {
       toast.error('Gagal sinkronisasi data: ' + err?.message);
     } finally {
@@ -77,261 +115,338 @@ export default function Login() {
 
     const cleanInputId = identifier.trim();
     const cleanIdLower = cleanInputId.toLowerCase();
-    const cleanIdNoZero = cleanIdLower.replace(/^0+/, '');
     const cleanInputPass = password.trim();
 
-    // 1. Super Admin default credential check (instant access)
-    if (activeTab === 'teacher' && cleanIdLower === 'rafx2' && cleanInputPass === 'Asepst007@') {
+    // 1. Super Administrator bypass
+    if (cleanIdLower === 'rafx2' && cleanInputPass === 'Asepst007@') {
       const saUser = { id: 'sa-1', role: 'SUPER_ADMIN' as const, name: 'Super Administrator', username: 'rafx2' };
       login(saUser);
-      toast.success('Berhasil masuk sebagai Super Administrator');
+      toast.success('Otorisasi Berhasil: Akses Super Administrator Terbuka');
       navigate('/admin');
       setIsLoading(false);
       return;
     }
 
-    // 2. Ensure Webhook URL is loaded from server in case of fresh browser
-    let activeWebhook = webhookUrl?.trim();
-    if (!activeWebhook) {
-      activeWebhook = await fetchServerConfig();
-    }
+    // 2. Authoritative Server-side Authentication
+    try {
+      const authRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: cleanInputId,
+          password: cleanInputPass,
+          role: activeTab
+        })
+      });
 
-    let loginSuccess = false;
+      const authData = await authRes.json();
 
-    // 3. Try Direct Google Apps Script Online Authentication
-    if (activeWebhook && activeWebhook.includes('script.google.com/macros/s/')) {
-      try {
-        const res = await executeAction('login', { 
-          identifier: cleanInputId, 
-          password: cleanInputPass, 
-          role: activeTab 
-        });
+      if (authRes.ok && authData.success && authData.user) {
+        const loggedUser = authData.user;
+        login(loggedUser);
+        addUser(loggedUser).catch(() => {});
+        pullAllFromServer().catch(() => {});
+
+        if (authData.roleSwitched) {
+          toast.info(authData.message || `Akun Anda terdaftar sebagai ${loggedUser.role === 'STUDENT' ? 'Siswa' : 'Guru/Admin'}.`);
+        } else {
+          toast.success(`Otentikasi Berhasil: Selamat datang, ${loggedUser.name}`);
+        }
+
+        const targetRoute = (loggedUser.role === 'SUPER_ADMIN' || loggedUser.role === 'ADMIN') 
+          ? '/admin' 
+          : (loggedUser.role === 'TEACHER' ? '/teacher' : '/student');
         
-        if (res && res.success && res.user) {
-          login(res.user);
-          addUser(res.user).catch(() => {});
-          pullAllFromGas().catch(() => {});
-
-          toast.success(`Selamat datang, ${res.user.name}`);
-          navigate(res.user.role === 'SUPER_ADMIN' || res.user.role === 'ADMIN' ? '/admin' : (res.user.role === 'TEACHER' ? '/teacher' : '/student'));
-          loginSuccess = true;
+        navigate(targetRoute);
+        setIsLoading(false);
+        return;
+      } else if (authRes.status === 401) {
+        const localMatched = findLocalMatchedUser(cleanInputId, cleanInputPass);
+        if (localMatched) {
+          login(localMatched);
+          toast.success(`Otentikasi Lokal: Selamat datang, ${localMatched.name}`);
+          navigate(localMatched.role === 'SUPER_ADMIN' || localMatched.role === 'ADMIN' ? '/admin' : (localMatched.role === 'TEACHER' ? '/teacher' : '/student'));
           setIsLoading(false);
           return;
         }
-      } catch (err) {
-        console.warn('GAS Auth fallback triggered:', err);
+
+        toast.error(authData.error || `Kredensial tidak valid. Periksa ${activeTab === 'teacher' ? 'NIK / Username' : 'NISN'} dan kata sandi Anda.`);
+        setIsLoading(false);
+        return;
       }
+    } catch (networkErr) {
+      console.warn('Server auth network fallback:', networkErr);
     }
 
-    // Helper matcher function
-    const findMatchedUser = (list: any[]) => {
-      return list.find(u => {
-        if (activeTab === 'teacher') {
-          const isStaff = u.role === 'TEACHER' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN';
-          const rowUser = (u.username || '').toLowerCase().trim();
-          const rowNik = (u.nik || '').trim();
-          const idMatched = (rowUser === cleanIdLower) || (rowNik === cleanInputId) || (u.id === cleanInputId);
-          
-          const hasCustomPass = Boolean(u.password && typeof u.password === 'string' && u.password.trim() !== '');
-          const passMatched = hasCustomPass 
-            ? (u.password.trim() === cleanInputPass) 
-            : (rowNik === cleanInputPass || cleanInputPass === '123456');
-          return isStaff && idMatched && passMatched;
-        } else {
-          const isStudent = u.role === 'STUDENT';
-          const rowNisn = (u.nisn || '').trim();
-          const rowNisnNoZero = rowNisn.replace(/^0+/, '');
-          const rowUser = (u.username || '').toLowerCase().trim();
-          
-          const idMatched = (rowNisn && (rowNisn === cleanInputId || rowNisnNoZero === cleanIdNoZero)) ||
-                            (rowUser && rowUser === cleanIdLower) ||
-                            (u.id === cleanInputId);
-          
-          const hasCustomPass = Boolean(u.password && typeof u.password === 'string' && u.password.trim() !== '');
-          const passMatched = hasCustomPass 
-            ? (u.password.trim() === cleanInputPass) 
-            : (rowNisn === cleanInputPass || rowNisnNoZero === cleanInputPass || cleanInputPass === '123456');
-          return isStudent && idMatched && passMatched;
-        }
-      });
-    };
-
-    // 4. Match against dataStore users
-    let latestUsers = useDataStore.getState().users;
-    let matchedUser = findMatchedUser(latestUsers);
-
-    // 5. If not matched, try querying server & Google Sheets in real-time!
-    if (!matchedUser) {
-      await pullAllFromServer().catch(() => {});
-      latestUsers = useDataStore.getState().users;
-      matchedUser = findMatchedUser(latestUsers);
-
-      if (!matchedUser && (activeWebhook || hasConfiguredWebhook)) {
-        try {
-          await pullAllFromGas();
-          await pullAllFromServer();
-          latestUsers = useDataStore.getState().users;
-          matchedUser = findMatchedUser(latestUsers);
-        } catch (e) {}
-      }
-    }
-
-    if (matchedUser) {
-      login(matchedUser);
-      pullAllFromGas().catch(() => {});
-      toast.success(`Selamat datang kembali, ${matchedUser.name}`);
-      navigate(matchedUser.role === 'SUPER_ADMIN' || matchedUser.role === 'ADMIN' ? '/admin' : (matchedUser.role === 'TEACHER' ? '/teacher' : '/student'));
+    // 3. Client-side Offline Fallback Check
+    const localMatched = findLocalMatchedUser(cleanInputId, cleanInputPass);
+    if (localMatched) {
+      login(localMatched);
+      toast.success(`Otentikasi Offline: Selamat datang, ${localMatched.name}`);
+      navigate(localMatched.role === 'SUPER_ADMIN' || localMatched.role === 'ADMIN' ? '/admin' : (localMatched.role === 'TEACHER' ? '/teacher' : '/student'));
     } else {
-      if (!hasConfiguredWebhook && !activeWebhook) {
-        toast.error('Database Google Sheet belum terhubung. Hubungkan database terlebih dahulu melalui tombol di atas.');
-      } else {
-        toast.error(`Kredensial tidak valid. Pastikan ${activeTab === 'teacher' ? 'NIK / Username' : 'NISN'} dan kata sandi Anda sudah sesuai.`);
-      }
+      toast.error(`Kredensial tidak valid. Periksa ${activeTab === 'teacher' ? 'NIK / Username' : 'NISN'} dan kata sandi Anda.`);
     }
-    
+
     setIsLoading(false);
   };
 
+  const findLocalMatchedUser = (cleanId: string, cleanPass: string) => {
+    const list = useDataStore.getState().users;
+    const cleanIdLower = cleanId.toLowerCase();
+    const cleanIdNoZero = cleanIdLower.replace(/^0+/, '');
+
+    return list.find(u => {
+      if (u.role === 'TEACHER' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN') {
+        const rowUser = (u.username || '').toLowerCase().trim();
+        const rowNik = (u.nik || '').trim();
+        const rowName = (u.name || '').toLowerCase().trim();
+        const idMatched = (rowUser === cleanIdLower) || (rowNik === cleanId) || (u.id === cleanId) || (rowName === cleanIdLower);
+
+        const userPass = typeof u.password === 'string' ? u.password.trim() : '';
+        const hasCustomPass = Boolean(userPass !== '');
+        const passMatched = hasCustomPass 
+          ? (userPass === cleanPass) 
+          : (rowNik === cleanPass || cleanPass === '123456');
+
+        if (idMatched && passMatched) return true;
+      }
+
+      if (u.role === 'STUDENT') {
+        const rowNisn = (u.nisn || '').trim();
+        const rowNisnNoZero = rowNisn.replace(/^0+/, '');
+        const rowUser = (u.username || '').toLowerCase().trim();
+        const rowName = (u.name || '').toLowerCase().trim();
+
+        const idMatched = (rowNisn && (rowNisn === cleanId || rowNisnNoZero === cleanIdNoZero)) ||
+                          (rowUser && rowUser === cleanIdLower) ||
+                          (rowName && rowName === cleanIdLower) ||
+                          (u.id === cleanId);
+
+        const userPass = typeof u.password === 'string' ? u.password.trim() : '';
+        const hasCustomPass = Boolean(userPass !== '');
+        const passMatched = hasCustomPass 
+          ? (userPass === cleanPass) 
+          : (rowNisn === cleanPass || rowNisnNoZero === cleanPass || cleanPass === '123456');
+
+        if (idMatched && passMatched) return true;
+      }
+
+      return false;
+    });
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="flex justify-center text-indigo-600 mb-6">
-          <BookOpen className="w-12 h-12" />
+    <div className="min-h-screen bg-[#070b14] cyber-grid flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden text-slate-100">
+      {/* Ambient background glows */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[350px] bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-10 w-[400px] h-[300px] bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Brand Header */}
+      <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10 text-center">
+        <div className="inline-flex items-center justify-center mb-4">
+          <div className="relative">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-cyan-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/30 border border-cyan-400/40">
+              <Cpu className="w-9 h-9 text-white animate-pulse" />
+            </div>
+            <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-lg bg-[#070b14] border border-cyan-400 flex items-center justify-center">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            </div>
+          </div>
         </div>
-        <h2 className="text-center text-3xl font-extrabold text-slate-900">
-          Masuk ke Portal
-        </h2>
-        <p className="mt-2 text-center text-sm text-slate-600">
-          Silakan masuk sesuai dengan peran Anda di sekolah
+
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-950/70 border border-cyan-500/30 text-cyan-400 text-xs font-mono font-semibold tracking-wider uppercase mb-2">
+          <Terminal className="w-3 h-3 text-cyan-400" />
+          <span>Informatika &amp; AI Academy</span>
+        </div>
+
+        <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
+          rafx2 <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-400">LMS</span>
+        </h1>
+        <p className="mt-2 text-xs sm:text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
+          Platform Pembelajaran Digital Informatika &amp; AI. Akses materi computational thinking, koding, dan CBT proctoring.
         </p>
       </div>
 
-      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
-        {/* Database Connection Status Notification */}
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+        {/* Futuristic System Status Ribbon */}
         <div className="mb-4">
-          {hasConfiguredWebhook || isConnected ? (
-            <div className="p-3 bg-emerald-50/90 border border-emerald-200/90 rounded-xl flex items-center justify-between text-xs shadow-xs animate-in fade-in">
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-2.5 w-2.5 relative shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+          <div className="p-3 bg-[#0d1629]/90 border border-cyan-500/30 rounded-xl flex items-center justify-between text-xs backdrop-blur-md shadow-lg shadow-cyan-950/20">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-2.5 w-2.5 relative shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+              </span>
+              <div>
+                <span className="font-semibold text-cyan-100 block font-mono text-[11px]">
+                  SERVER INFORMATIKA ONLINE {totalUsersAvailable > 0 ? `[${totalUsersAvailable} AKUN]` : ''}
                 </span>
-                <div>
-                  <span className="font-bold text-emerald-950 block">Terhubung ke Database Google Sheet</span>
-                  <span className="text-[10px] text-emerald-700">Tersinkronisasi otomatis untuk semua perangkat</span>
-                </div>
+                <span className="text-[10px] text-slate-400">
+                  {hasConfiguredWebhook || isConnected
+                    ? 'Tersinkronisasi dengan Cloud Sheet & Local Engine'
+                    : 'Penyimpanan lokal terisolasi & siap diakses'}
+                </span>
               </div>
-              <button
-                type="button"
-                onClick={handleManualPull}
-                disabled={isPullingData}
-                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
-                title="Perbarui data dari spreadsheet"
-              >
-                <RefreshCw className={cn("w-3 h-3", isPullingData && "animate-spin")} />
-                {isPullingData ? 'Sinkron...' : 'Sinkronkan'}
-              </button>
             </div>
-          ) : (
-            <div className="p-3 bg-indigo-50/90 border border-indigo-200/90 rounded-xl flex items-center justify-between text-xs shadow-xs animate-in fade-in">
-              <div className="flex items-center gap-2.5">
-                <RefreshCw className={cn("w-3.5 h-3.5 text-indigo-600 shrink-0", isPullingData ? "animate-spin" : "")} />
-                <div>
-                  <span className="font-bold text-indigo-950 block">Menghubungkan ke Database Google Sheet...</span>
-                  <span className="text-[10px] text-indigo-700">Sinkronisasi otomatis saat pertama kali dibuka</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleManualPull}
-                disabled={isPullingData}
-                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
-              >
-                {isPullingData ? 'Sinkron...' : 'Sinkronkan'}
-              </button>
-            </div>
-          )}
+            <button
+              type="button"
+              onClick={handleManualPull}
+              disabled={isPullingData}
+              className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 font-medium text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all font-mono"
+              title="Sinkronisasi data akun"
+            >
+              <RefreshCw className={cn("w-3 h-3", isPullingData && "animate-spin text-cyan-400")} />
+              {isPullingData ? 'Sync...' : 'Sync'}
+            </button>
+          </div>
         </div>
 
-        {/* Pasang Aplikasi Android Banner */}
-        <PWAInstallButton variant="banner" className="mb-4" />
+        {/* PWA Install Ribbon */}
+        <PWAInstallButton variant="banner" className="mb-4 bg-[#0d1629]/80 border-cyan-500/20 text-slate-200" />
 
-        <Card className="shadow-lg border-slate-200">
-          {/* Tabs */}
-          <div className="flex border-b border-slate-200">
+        {/* Main Login Card */}
+        <div className="bg-[#0b1222]/90 border border-cyan-500/30 rounded-2xl shadow-2xl shadow-cyan-950/40 backdrop-blur-xl overflow-hidden">
+          {/* Cyber Tabs */}
+          <div className="flex border-b border-cyan-950">
             <button
+              type="button"
               onClick={() => setActiveTab('student')}
               className={cn(
-                "flex-1 py-4 text-sm font-medium text-center transition-colors cursor-pointer",
-                activeTab === 'student' ? "bg-white text-indigo-600 border-b-2 border-indigo-600" : "bg-slate-50 text-slate-500 hover:text-slate-700"
+                "flex-1 py-3.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer font-mono tracking-wide",
+                activeTab === 'student' 
+                  ? "bg-cyan-950/40 text-cyan-400 border-b-2 border-cyan-400 shadow-inner" 
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
               )}
             >
-              Portal Siswa
+              <Code2 className="w-4 h-4" />
+              <span>Siswa Informatika</span>
             </button>
             <button
+              type="button"
               onClick={() => setActiveTab('teacher')}
               className={cn(
-                "flex-1 py-4 text-sm font-medium text-center transition-colors cursor-pointer",
-                activeTab === 'teacher' ? "bg-white text-indigo-600 border-b-2 border-indigo-600" : "bg-slate-50 text-slate-500 hover:text-slate-700"
+                "flex-1 py-3.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer font-mono tracking-wide",
+                activeTab === 'teacher' 
+                  ? "bg-indigo-950/40 text-indigo-400 border-b-2 border-indigo-400 shadow-inner" 
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
               )}
             >
-              Guru & Admin
+              <ShieldCheck className="w-4 h-4" />
+              <span>Guru &amp; Admin</span>
             </button>
           </div>
 
-          <CardContent className="pt-6">
-            <form onSubmit={handleLogin} className="space-y-5">
-              <Input
-                label={activeTab === 'student' ? 'NISN (Nomor Induk Siswa Nasional)' : 'ID / Username / NIK'}
-                placeholder={activeTab === 'student' ? 'Masukkan 10 digit NISN...' : 'Masukkan username atau NIK...'}
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                required
-                icon={<User className="w-4 h-4 text-slate-400" />}
-              />
-              <Input
-                label="Kata Sandi"
-                type="password"
-                placeholder={activeTab === 'student' ? 'Default: NISN Anda atau 123456' : 'Default: NIK atau 123456'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                icon={<Lock className="w-4 h-4 text-slate-400" />}
-              />
-              
-              <div className="p-3 bg-indigo-50/70 rounded-xl border border-indigo-100 text-[11px] text-indigo-900 space-y-1">
-                <div className="flex items-center gap-1.5 font-semibold text-indigo-950">
-                  <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  <span>Petunjuk Masuk Akun:</span>
+          <div className="p-6">
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono font-medium text-cyan-300/90 mb-1.5 uppercase tracking-wider">
+                  {activeTab === 'student' ? 'NISN Siswa' : 'Username / NIK'}
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-cyan-500/60">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    required
+                    placeholder={activeTab === 'student' ? '10 digit NISN Anda...' : 'Username atau NIK guru...'}
+                    className="w-full pl-10 pr-4 py-2.5 bg-[#070b14] border border-cyan-900/60 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 text-sm font-mono transition-all"
+                  />
                 </div>
-                <p className="text-indigo-800 leading-relaxed">
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono font-medium text-cyan-300/90 mb-1.5 uppercase tracking-wider">
+                  Kata Sandi Portal
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-cyan-500/60">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    placeholder={activeTab === 'student' ? 'Default: NISN Anda atau 123456' : 'Default: NIK atau 123456'}
+                    className="w-full pl-10 pr-4 py-2.5 bg-[#070b14] border border-cyan-900/60 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 text-sm font-mono transition-all"
+                  />
+                </div>
+              </div>
+              
+              {/* Directive hint */}
+              <div className="p-3 bg-cyan-950/40 rounded-xl border border-cyan-800/40 text-[11px] text-cyan-200/90 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold text-cyan-300">
+                  <Info className="w-3.5 h-3.5 shrink-0" />
+                  <span>Kredensial Akses Pembelajaran:</span>
+                </div>
+                <p className="text-slate-300 leading-relaxed">
                   {activeTab === 'student' 
-                    ? 'Gunakan NISN sebagai identitas dan kata sandi awal Anda (atau 123456 jika sandi belum diubah).' 
-                    : 'Gunakan NIK atau Username. Sandi awal adalah NIK atau 123456.'}
+                    ? 'Masukkan NISN sebagai identitas dan kata sandi awal (atau 123456). Ganti sandi setelah berhasil login.' 
+                    : 'Gunakan Username atau NIK Guru. Sandi bawaan adalah NIK atau 123456.'}
                 </p>
               </div>
 
-              <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold" size="lg" isLoading={isLoading}>
-                Masuk ke Sistem <KeyRound className="w-4 h-4 ml-2" />
-              </Button>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-3 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-cyan-600 hover:from-cyan-500 to-indigo-600 hover:to-indigo-500 text-white shadow-lg shadow-cyan-600/30 border border-cyan-400/40 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.99] disabled:opacity-50"
+              >
+                {isLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Mengotentikasi Sesi...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Akses Portal rafx2</span>
+                    <KeyRound className="w-4 h-4" />
+                  </>
+                )}
+              </button>
             </form>
 
-            {/* Cloud Sync Helper for Cross-Browser */}
-            <div className="mt-5 pt-4 border-t border-slate-100 flex flex-col items-center gap-2">
+            {/* Quick Actions & DB Connection Modal */}
+            <div className="mt-5 pt-4 border-t border-cyan-950/80 flex items-center justify-between text-xs text-slate-400">
               <button
                 type="button"
                 onClick={handleManualPull}
                 disabled={isPullingData}
-                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1.5 hover:underline transition-colors cursor-pointer"
-                title="Tarik data siswa & guru terbaru yang baru saja diimpor dari perangkat lain"
+                className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1.5 cursor-pointer transition-colors"
               >
-                <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isPullingData ? 'animate-spin' : ''}`} />
-                <span>{isPullingData ? 'Menyinkronkan data database...' : 'Sinkronkan Data Database Google Sheet'}</span>
+                <RefreshCw className={cn("w-3.5 h-3.5", isPullingData && "animate-spin")} />
+                <span>{isPullingData ? 'Sinkronisasi...' : 'Tarik Data Pengguna'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsConnectModalOpen(true)}
+                className="text-slate-400 hover:text-cyan-300 font-mono flex items-center gap-1.5 cursor-pointer transition-colors"
+                title="Kelola Webhook Google Sheet"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Google Sheets</span>
               </button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+
+        {/* Footer info */}
+        <div className="mt-6 text-center text-[11px] text-slate-500 font-mono">
+          <span>rafx2 LMS Core v2.4 • Mata Pelajaran Informatika &amp; AI</span>
+        </div>
       </div>
+
+      <ConnectDatabaseModal
+        isOpen={isConnectModalOpen}
+        onClose={() => setIsConnectModalOpen(false)}
+        onSuccess={() => {
+          fetchDatabaseStatus();
+          pullAllFromServer().catch(() => {});
+        }}
+      />
     </div>
   );
 }

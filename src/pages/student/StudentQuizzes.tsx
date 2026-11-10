@@ -1,27 +1,64 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Play, Clock, HelpCircle, AlertTriangle, CheckCircle2, FileText, ShieldAlert, CalendarClock, Lock } from 'lucide-react';
+import { Play, Clock, HelpCircle, AlertTriangle, CheckCircle2, FileText, ShieldAlert, CalendarClock, Lock, RefreshCw, RotateCcw, Eye } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDataStore } from '@/store/dataStore';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from '@/components/ui/Toast';
-import { isItemForClass } from '@/lib/utils';
+import { isItemForClass, isResultMatchStudent, isQuizResetForStudent } from '@/lib/utils';
 import ExamRulesModal from '@/components/student/ExamRulesModal';
 
 export default function StudentQuizzes() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { quizzes, quizResults, pullAllFromServer } = useDataStore();
+  const { users, quizzes, quizResults, resetQuizKeys, pullAllFromServer } = useDataStore();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const currentStudent = users.find(u => 
+    (user?.id && u.id === user.id) || 
+    (user?.nisn && u.nisn === user.nisn) ||
+    (user?.username && u.username === user.username)
+  ) || user;
+
+  const studentClass = currentStudent?.classId || (currentStudent as any)?.kelas || (currentStudent as any)?.className || user?.classId || (user as any)?.kelas || '';
 
   useEffect(() => {
     pullAllFromServer().catch(() => {});
+
+    // Active live polling every 5 seconds so schedule changes by teacher appear automatically
+    const timer = setInterval(() => {
+      pullAllFromServer(false).catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
   }, []);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await pullAllFromServer(true);
+      toast.success('Jadwal kuis diperbarui langsung dari Google Sheet');
+    } catch (e) {
+      toast.info('Gagal menyegarkan data');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const [selectedQuizForRules, setSelectedQuizForRules] = useState<any | null>(null);
 
-  const studentQuizzes = quizzes.filter(q => isItemForClass(q.classId, q.targetClasses, user?.classId));
+  const studentQuizzes = quizzes.filter(q => isItemForClass(q.classId, q.targetClasses, studentClass) || (!studentClass && quizzes.length > 0));
   const now = new Date();
+
+  const studentKeysForReset = [
+    currentStudent?.id,
+    currentStudent?.nisn,
+    currentStudent?.nisn ? currentStudent.nisn.replace(/^0+/, '') : '',
+    currentStudent?.username,
+    user?.id,
+    user?.nisn,
+    user?.username
+  ].filter(Boolean) as string[];
 
   return (
     <div className="space-y-6">
@@ -32,20 +69,42 @@ export default function StudentQuizzes() {
             Daftar tugas evaluasi dan ujian terjadwal untuk kelas Anda
           </p>
         </div>
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className="gap-1.5 text-xs text-slate-600 border-slate-300 hover:bg-slate-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-indigo-600' : ''}`} />
+          Segarkan Jadwal (Live Sheet)
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {studentQuizzes.map((quiz) => {
-          const result = quizResults.find(r => r.quizId === quiz.id && r.studentId === user?.id);
+          const matchingResult = quizResults.find(r => 
+            r.quizId === quiz.id && isResultMatchStudent(r, currentStudent || user)
+          );
+          const isResetQuiz = !matchingResult && isQuizResetForStudent(quiz.id, currentStudent || user, resetQuizKeys);
+          const result = matchingResult;
           const isCompleted = !!result;
+          const isResetForStudent = isResetQuiz;
 
-          const startTime = quiz.startTime ? new Date(quiz.startTime) : null;
-          const endTime = quiz.endTime ? new Date(quiz.endTime) : null;
-          const isNotStarted = startTime ? startTime > now : false;
-          const isExpired = endTime ? endTime < now : false;
+          const isScheduledQuiz = quiz.isScheduled === true && Boolean(quiz.startTime || quiz.endTime);
+          const startTime = (isScheduledQuiz && quiz.startTime) ? new Date(quiz.startTime) : null;
+          const endTime = (isScheduledQuiz && quiz.endTime) ? new Date(quiz.endTime) : null;
+          const isNotStarted = startTime && !isNaN(startTime.getTime()) ? startTime > now : false;
+          const isExpired = endTime && !isNaN(endTime.getTime()) ? endTime < now : false;
 
           return (
-            <Card key={quiz.id} className={isCompleted ? 'opacity-75 bg-slate-50' : 'border-indigo-100 hover:border-indigo-300 transition-colors flex flex-col justify-between'}>
+            <Card key={quiz.id} className={
+              isCompleted 
+                ? 'opacity-75 bg-slate-50' 
+                : isResetForStudent
+                  ? 'border-amber-300 bg-amber-50/20 hover:border-amber-400 transition-colors flex flex-col justify-between ring-1 ring-amber-200'
+                  : 'border-indigo-100 hover:border-indigo-300 transition-colors flex flex-col justify-between'
+            }>
               <div>
                 <CardHeader className="pb-3 border-b-0">
                   <div className="flex items-start justify-between">
@@ -55,6 +114,10 @@ export default function StudentQuizzes() {
                     {isCompleted ? (
                       <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-1 rounded flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" /> Selesai
+                      </span>
+                    ) : isResetForStudent ? (
+                      <span className="text-xs font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-1 rounded flex items-center gap-1 animate-pulse">
+                        <RotateCcw className="w-3 h-3 text-amber-700" /> Di-reset Guru (Siap Diulang)
                       </span>
                     ) : isNotStarted ? (
                       <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-1 rounded flex items-center gap-1">
@@ -147,17 +210,47 @@ export default function StudentQuizzes() {
                     ) : (
                       <Button 
                         size="sm"
-                        className="gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm" 
-                        onClick={() => setSelectedQuizForRules(quiz)}
+                        className={`gap-1.5 text-xs shadow-sm text-white ${
+                          isResetForStudent 
+                            ? 'bg-amber-600 hover:bg-amber-700 font-bold' 
+                            : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`} 
+                        onClick={() => {
+                          if (isResetForStudent) {
+                            const uids = [user?.id, user?.nisn, 'guest'].filter(Boolean) as string[];
+                            for (const u of uids) {
+                              localStorage.removeItem(`cbt_finished_${u}_${quiz.id}`);
+                              localStorage.removeItem(`cbt_result_${u}_${quiz.id}`);
+                            }
+                          }
+                          setSelectedQuizForRules(quiz);
+                        }}
                       >
-                        <Play className="w-3.5 h-3.5" /> Mulai Ujian
+                        {isResetForStudent ? (
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        ) : (
+                          <Play className="w-3.5 h-3.5" />
+                        )}
+                        {isResetForStudent ? 'Mulai Ujian Ulang' : 'Mulai Ujian'}
                       </Button>
                     )}
                   </div>
                 ) : (
-                  <div className="pt-3 border-t border-slate-200 flex justify-between items-center">
-                    <span className="text-sm font-medium text-slate-500">Nilai Akhir:</span>
-                    <span className="text-2xl font-bold text-emerald-600">{result?.score || 100}</span>
+                  <div className="pt-3 border-t border-slate-200 flex flex-col gap-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium text-slate-500">Nilai Akhir:</span>
+                      <span className={`text-2xl font-bold ${result?.disqualified ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {result?.disqualified ? '0 (Diskualifikasi)' : (result?.finalScore !== undefined ? result.finalScore : (result?.score ?? 0))}
+                      </span>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="w-full text-xs gap-1.5 border-slate-300 text-slate-700 hover:bg-slate-50 hover:text-indigo-600 font-medium"
+                      onClick={() => navigate(`/student/quizzes/${quiz.id}`)}
+                    >
+                      <Eye className="w-3.5 h-3.5 text-indigo-600" /> Lihat Lembar Nilai CBT
+                    </Button>
                   </div>
                 )}
               </div>
@@ -178,8 +271,13 @@ export default function StudentQuizzes() {
           onClose={() => setSelectedQuizForRules(null)}
           onAgreeAndStart={() => {
             const quizId = selectedQuizForRules.id;
+            const uids = [user?.id, user?.nisn, 'guest'].filter(Boolean) as string[];
+            for (const u of uids) {
+              localStorage.removeItem(`cbt_finished_${u}_${quizId}`);
+              localStorage.removeItem(`cbt_result_${u}_${quizId}`);
+            }
             setSelectedQuizForRules(null);
-            navigate(`/student/quizzes/${quizId}`);
+            navigate(`/student/quizzes/${quizId}`, { state: { autoStart: true } });
           }}
           quiz={selectedQuizForRules}
           student={user}

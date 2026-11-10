@@ -21,6 +21,7 @@ import AndroidAppGuide from './pages/admin/AndroidAppGuide';
 // Teacher Pages
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
 import TeacherMaterials from './pages/teacher/TeacherMaterials';
+import TeacherAssignments from './pages/teacher/TeacherAssignments';
 import TeacherQuizzes from './pages/teacher/TeacherQuizzes';
 import TeacherGrades from './pages/teacher/TeacherGrades';
 import TeacherAttendance from './pages/teacher/TeacherAttendance';
@@ -49,47 +50,97 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
 
 export default function App() {
   const { webhookUrl, testConnection, fetchServerConfig, checkAndMaintainConnection } = useGasStore();
-  const { pullAllFromGas, pullAllFromServer } = useDataStore();
+  const { pullAllFromServer, processOfflineQueue } = useDataStore();
 
   useEffect(() => {
     async function initApp() {
-      // 1. Pull central database from server so any new browser immediately gets imported data
-      try {
-        await pullAllFromServer();
-      } catch (e) {}
-
-      // 2. Fetch server config to get shared webhookUrl across all browsers
-      const activeUrl = await fetchServerConfig();
+      // 1. Fetch server config to obtain shared Google Sheets Webhook URL
+      const activeUrl = await fetchServerConfig().catch(() => '');
       const clean = (activeUrl || webhookUrl)?.trim();
-      
+
+      // 2. Direct real-time sync with Google Sheet on every device startup
+      try {
+        if (clean && clean.includes('script.google.com/macros/s/')) {
+          await pullAllFromServer(true);
+        } else {
+          await pullAllFromServer(false);
+        }
+        await processOfflineQueue();
+      } catch (e) {
+        await pullAllFromServer(false).catch(() => {});
+      }
+
       if (clean && clean.includes('script.google.com/macros/s/')) {
         await testConnection().catch(() => {});
       }
     }
     initApp();
 
-    // 4. Multi-device Auto-Sync Loop: Pull latest quizzes & materials every 10 seconds
-    const syncInterval = setInterval(() => {
-      pullAllFromServer().catch(() => {});
-    }, 10 * 1000);
+    // 3. Real-time Push via Server-Sent Events (SSE) for instant zero-latency sync across all devices
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/realtime/stream');
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload && payload.type !== 'connected') {
+            // Avoid interrupting teacher while actively editing quiz questions
+            if (!useDataStore.getState().activeEditingQuizId) {
+              pullAllFromServer(false).catch(() => {});
+            }
+          }
+        } catch (e) {}
+      };
+      eventSource.onerror = () => {
+        // EventSource will automatically reconnect in background
+      };
+    } catch (e) {}
 
-    // 5. Persistent Auto-Reconnect Heartbeat: Keep GAS connected at all times
+    // 4. Multi-device Active Polling Loop: Pull latest quizzes, schedules & scores every 5 seconds
+    const syncInterval = setInterval(() => {
+      // Do not interrupt teacher while actively editing quiz questions
+      if (!useDataStore.getState().activeEditingQuizId) {
+        pullAllFromServer(false).catch(() => {});
+      }
+      processOfflineQueue().catch(() => {});
+    }, 5 * 1000);
+
+    // 5. Persistent Auto-Reconnect Heartbeat: Keep Google Apps Script connected
     const heartbeatInterval = setInterval(() => {
       checkAndMaintainConnection().catch(() => {});
     }, 45 * 1000);
 
-    // 6. Window focus / visibility change sync: update instantly when switching back to tab
-    const handleFocus = () => {
-      pullAllFromServer().catch(() => {});
+    // 6. Online reconnection sync: trigger fresh pull from Sheet when device comes online
+    const handleOnline = () => {
+      processOfflineQueue().catch(() => {});
+      if (!useDataStore.getState().activeEditingQuizId) {
+        pullAllFromServer(true).catch(() => {});
+      }
     };
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleFocus);
+    window.addEventListener('online', handleOnline);
+
+    // 7. Window focus / visibility change / pageshow sync: update instantly when switching back to tab or unlocking phone
+    const handleResume = () => {
+      if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') {
+        return;
+      }
+      if (!useDataStore.getState().activeEditingQuizId) {
+        pullAllFromServer(false).catch(() => {});
+      }
+      processOfflineQueue().catch(() => {});
+    };
+    window.addEventListener('focus', handleResume);
+    window.addEventListener('pageshow', handleResume);
+    document.addEventListener('visibilitychange', handleResume);
 
     return () => {
+      if (eventSource) eventSource.close();
       clearInterval(syncInterval);
       clearInterval(heartbeatInterval);
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleFocus);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('focus', handleResume);
+      window.removeEventListener('pageshow', handleResume);
+      document.removeEventListener('visibilitychange', handleResume);
     };
   }, []);
 
@@ -145,6 +196,11 @@ export default function App() {
         <Route path="/teacher/materials" element={
           <ProtectedRoute allowedRoles={['TEACHER']}>
             <TeacherMaterials />
+          </ProtectedRoute>
+        } />
+        <Route path="/teacher/assignments" element={
+          <ProtectedRoute allowedRoles={['TEACHER', 'SUPER_ADMIN', 'ADMIN']}>
+            <TeacherAssignments />
           </ProtectedRoute>
         } />
         <Route path="/teacher/quizzes" element={

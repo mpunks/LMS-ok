@@ -187,8 +187,8 @@ export default function ExamRulesModal({
                   Tingkatan Sanksi & Hukuman:
                 </h4>
                 <div className="space-y-1.5 text-rose-950">
-                  <p>• <strong>Peringatan 1 - 2:</strong> Muncul notifikasi peringatan di layar dan bukti tangkapan layar langsung dikirim ke Berita Acara Guru.</p>
-                  <p>• <strong>Peringatan 3:</strong> Lembar ujian <strong>otomatis dikunci dan dihentikan seketika</strong>.</p>
+                  <p>• <strong>Peringatan 1 - 4:</strong> Muncul notifikasi peringatan di layar dan bukti tangkapan layar langsung dicatat ke Berita Acara Guru.</p>
+                  <p>• <strong>Peringatan 5:</strong> Lembar ujian <strong>otomatis dikunci dan dihentikan seketika (Batas maksimal 5 kali pelanggaran)</strong>.</p>
                   <p>• <strong>Sanksi Guru & Sekolah:</strong> Guru berhak memberikan <strong>pemotongan nilai</strong>, pembatalan nilai, atau <strong>diskualifikasi ujian (Nilai 0)</strong> berdasarkan bukti Berita Acara Pelanggaran.</p>
                 </div>
               </div>

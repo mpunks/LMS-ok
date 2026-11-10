@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/Button';
 import { 
   X, 
@@ -39,9 +39,11 @@ export default function QuizQuestionsModal({
   onClose,
   quiz
 }: QuizQuestionsModalProps) {
-  const { updateQuiz, syncQuizToGas } = useDataStore();
+  const { quizzes, updateQuiz, syncQuizToGas, setActiveEditingQuizId } = useDataStore();
   const { isConnected } = useGasStore();
-  const questions: Question[] = quiz.questions || [];
+  // Always select the live quiz from the store so any updates are immediately reflected
+  const liveQuiz = quizzes.find(q => q.id === quiz.id) || quiz;
+  const questions: Question[] = liveQuiz.questions || [];
 
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
   const [showEditorModal, setShowEditorModal] = useState(false);
@@ -49,6 +51,15 @@ export default function QuizQuestionsModal({
   const [expandedMediaQuestionId, setExpandedMediaQuestionId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncingToGas, setIsSyncingToGas] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && quiz.id) {
+      setActiveEditingQuizId(quiz.id);
+      return () => {
+        setActiveEditingQuizId(null);
+      };
+    }
+  }, [isOpen, quiz.id, setActiveEditingQuizId]);
 
   if (!isOpen) return null;
 
@@ -58,17 +69,21 @@ export default function QuizQuestionsModal({
   const handleSaveQuestion = async (savedQuestion: Question) => {
     try {
       setIsSaving(true);
+      // Read latest quiz and questions directly from authoritative store to prevent any stale closure
+      const currentQuiz = useDataStore.getState().quizzes.find(q => q.id === quiz.id) || liveQuiz;
+      const currentQuestions = currentQuiz.questions || [];
+
       let updatedQuestions: Question[];
-      const existsIndex = questions.findIndex(q => q.id === savedQuestion.id);
+      const existsIndex = currentQuestions.findIndex(q => q.id === savedQuestion.id);
 
       if (existsIndex >= 0) {
         // Edit existing
-        updatedQuestions = [...questions];
+        updatedQuestions = [...currentQuestions];
         updatedQuestions[existsIndex] = savedQuestion;
         toast.success(`Soal nomor ${existsIndex + 1} berhasil diperbarui`);
       } else {
         // Add new
-        updatedQuestions = [...questions, savedQuestion];
+        updatedQuestions = [...currentQuestions, savedQuestion];
         toast.success(`Soal baru berhasil ditambahkan (Total ${updatedQuestions.length} soal)`);
       }
 
@@ -317,15 +332,31 @@ export default function QuizQuestionsModal({
 
               return (
                 <div
-                  key={question.id}
+                  key={`${question.id}-${index}`}
                   className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs hover:border-indigo-200 transition-all space-y-3"
                 >
                   {/* Top Bar of Card */}
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="w-7 h-7 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
                         {index + 1}
                       </span>
+
+                      {/* Question Type Badge */}
+                      {question.type === 'ESSAY' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">
+                          Essai / Uraian
+                        </span>
+                      ) : question.type === 'MCMA' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-purple-800 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-lg">
+                          MCMA (Kompleks)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
+                          Pilihan Ganda
+                        </span>
+                      )}
+
                       <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">
                         {question.points || 10} Poin
                       </span>
@@ -344,6 +375,11 @@ export default function QuizQuestionsModal({
                       {question.audioUrl && (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
                           <Music className="w-3 h-3" /> Audio
+                        </span>
+                      )}
+                      {question.optionImages && question.optionImages.some(img => Boolean(img)) && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md">
+                          <ImageIcon className="w-3 h-3" /> Bergambar Pilihan
                         </span>
                       )}
                     </div>
@@ -435,36 +471,64 @@ export default function QuizQuestionsModal({
                     </div>
                   )}
 
-                  {/* Options List */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 pl-1">
-                    {question.options.map((opt, optIdx) => {
-                      const isCorrect = question.correctOptionIndex === optIdx;
-                      const letter = String.fromCharCode(65 + optIdx);
+                  {/* Question Content based on Type */}
+                  {question.type === 'ESSAY' ? (
+                    <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/40 text-xs space-y-1">
+                      <span className="font-bold text-amber-900 block">Pedoman / Kunci Rubrik Jawaban:</span>
+                      <p className="text-amber-800 whitespace-pre-wrap leading-relaxed">
+                        {question.sampleAnswer || 'Belum ada pedoman jawaban atau rubrik tertulis.'}
+                      </p>
+                    </div>
+                  ) : (
+                    /* Options List for Single and MCMA with Option Images */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 pl-1">
+                      {(question.options || []).map((opt, optIdx) => {
+                        const isCorrect = question.type === 'MCMA'
+                          ? (question.correctOptionIndices?.includes(optIdx) ?? false)
+                          : question.correctOptionIndex === optIdx;
+                        const letter = String.fromCharCode(65 + optIdx);
+                        const optImg = question.optionImages?.[optIdx];
 
-                      return (
-                        <div
-                          key={optIdx}
-                          className={`flex items-center gap-2.5 p-2 rounded-xl border text-xs ${
-                            isCorrect
-                              ? 'border-emerald-300 bg-emerald-50/80 text-emerald-950 font-semibold'
-                              : 'border-slate-200 bg-slate-50/50 text-slate-700'
-                          }`}
-                        >
-                          <span className={`w-5 h-5 rounded-md flex items-center justify-center font-bold text-[11px] shrink-0 ${
-                            isCorrect 
-                              ? 'bg-emerald-600 text-white' 
-                              : 'bg-white border border-slate-300 text-slate-600'
-                          }`}>
-                            {letter}
-                          </span>
-                          <span className="truncate flex-1">{opt}</span>
-                          {isCorrect && (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        return (
+                          <div
+                            key={optIdx}
+                            className={`flex flex-col gap-1.5 p-2.5 rounded-xl border text-xs ${
+                              isCorrect
+                                ? 'border-emerald-300 bg-emerald-50/80 text-emerald-950 font-semibold'
+                                : 'border-slate-200 bg-slate-50/50 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className={`w-5 h-5 rounded-md flex items-center justify-center font-bold text-[11px] shrink-0 ${
+                                isCorrect 
+                                  ? 'bg-emerald-600 text-white' 
+                                  : 'bg-white border border-slate-300 text-slate-600'
+                              }`}>
+                                {letter}
+                              </span>
+                              <span className="truncate flex-1">{opt || `(Pilihan ${letter})`}</span>
+                              {isCorrect && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" /> KUNCI
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Option Image Thumbnail if present */}
+                            {optImg && (
+                              <div className="mt-1 pl-7">
+                                <img
+                                  src={optImg}
+                                  alt={`Gambar Opsi ${letter}`}
+                                  className="h-16 max-w-full object-contain rounded-lg border border-slate-200 bg-white"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Explanation if exists */}
                   {question.explanation && (

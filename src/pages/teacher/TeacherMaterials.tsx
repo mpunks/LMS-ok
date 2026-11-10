@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -12,7 +13,10 @@ import {
   Link as LinkIcon, 
   Code,
   ClipboardList,
-  CalendarClock
+  CalendarClock,
+  FileCheck,
+  ChevronRight,
+  RefreshCw
 } from 'lucide-react';
 import { toast } from '@/components/ui/Toast';
 import { useDataStore } from '@/store/dataStore';
@@ -22,8 +26,11 @@ import ClassCheckboxSelector from '@/components/teacher/ClassCheckboxSelector';
 import ManageTeacherClassesModal from '@/components/teacher/ManageTeacherClassesModal';
 
 export default function TeacherMaterials() {
+  const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { materials, addMaterial, updateMaterial, deleteMaterial, pullAllFromServer } = useDataStore();
+  const { materials, assignments = [], addMaterial, updateMaterial, deleteMaterial, pullAllFromServer } = useDataStore();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [viewScope, setViewScope] = useState<'MY' | 'ALL'>('MY');
 
   useEffect(() => {
     pullAllFromServer().catch(() => {});
@@ -36,7 +43,22 @@ export default function TeacherMaterials() {
         ? (user.assignedClasses as string).split(',').map(s => s.trim()).filter(Boolean)
         : []);
 
-  const teacherMaterials = materials.filter(m => m.teacherId === user?.id).sort((a, b) => a.order - b.order);
+  const isStaff = user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+
+  // Flexible filter so teacher materials are NEVER lost on reopen/relogin
+  const myMaterialsList = materials.filter(m => {
+    if (!m) return false;
+    if (isStaff) return true;
+    const matchId = user?.id && m.teacherId === user.id;
+    const matchNik = user?.nik && (m.teacherId === user.nik || (m as any).teacherNik === user.nik);
+    const matchUser = user?.username && (m.teacherId === user.username || (m as any).teacherUsername === user.username);
+    const matchName = user?.name && (m as any).teacherName && String((m as any).teacherName).toLowerCase().trim() === String(user.name).toLowerCase().trim();
+    const matchSubject = user?.subject && m.subjectId && String(m.subjectId).toLowerCase().trim() === String(user.subject).toLowerCase().trim();
+    const matchClass = assignedClasses.length > 0 && assignedClasses.some(c => (m.classId && m.classId.includes(c)) || (Array.isArray(m.targetClasses) && m.targetClasses.includes(c)));
+    return matchId || matchNik || matchUser || matchName || matchSubject || matchClass;
+  });
+
+  const teacherMaterials = (viewScope === 'ALL' || isStaff ? materials : myMaterialsList).sort((a, b) => a.order - b.order);
   
   const [showForm, setShowForm] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
@@ -58,6 +80,18 @@ export default function TeacherMaterials() {
     assignmentDueDate: ''
   });
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await pullAllFromServer();
+      toast.success('Materi berhasil disinkronkan dari server');
+    } catch {
+      toast.error('Gagal memperbarui materi');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.selectedClasses.length === 0) {
@@ -78,6 +112,9 @@ export default function TeacherMaterials() {
       order: formData.order,
       semester: 1,
       teacherId: user!.id,
+      teacherName: user?.name || '',
+      teacherNik: user?.nik || '',
+      teacherUsername: user?.username || '',
       pdfUrl: formData.type === 'PDF' ? formData.url : undefined,
       youtubeUrl: formData.type === 'VIDEO' ? formData.url : undefined,
       linkUrl: formData.type === 'LINK' ? formData.url : undefined,
@@ -143,30 +180,74 @@ export default function TeacherMaterials() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Materi Belajar</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Kelola dan tugaskan bahan ajar (PDF, video, link, teks) untuk kelas yang Anda ampu
+            Kelola bahan ajar, tugas, dan modul pembelajaran untuk kelas yang Anda ampu
           </p>
         </div>
-        <Button className="gap-2 shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white" onClick={() => {
-          setIsEdit(false);
-          setFormData({ 
-            id: '', 
-            title: '', 
-            selectedClasses: assignedClasses.length > 0 ? [assignedClasses[0]] : [], 
-            subjectId: user?.subject || 'Matematika', 
-            type: 'PDF', 
-            content: '', 
-            url: '', 
-            chapter: 'Bab 1', 
-            order: teacherMaterials.length + 1,
-            hasAssignment: false,
-            assignmentTitle: '',
-            assignmentInstructions: '',
-            assignmentDueDate: ''
-          });
-          setShowForm(!showForm);
-        }}>
-          <Plus className="w-4 h-4" /> Tambah Materi Baru
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="text-xs gap-1.5 border-slate-300 hover:bg-slate-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Menyinkronkan...' : 'Sinkronkan'}
+          </Button>
+          <Button className="gap-2 shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white" onClick={() => {
+            setIsEdit(false);
+            setFormData({ 
+              id: '', 
+              title: '', 
+              selectedClasses: assignedClasses.length > 0 ? [assignedClasses[0]] : [], 
+              subjectId: user?.subject || 'Matematika', 
+              type: 'PDF', 
+              content: '', 
+              url: '', 
+              chapter: 'Bab 1', 
+              order: teacherMaterials.length + 1,
+              hasAssignment: false,
+              assignmentTitle: '',
+              assignmentInstructions: '',
+              assignmentDueDate: ''
+            });
+            setShowForm(!showForm);
+          }}>
+            <Plus className="w-4 h-4" /> Tambah Materi Baru
+          </Button>
+        </div>
+      </div>
+
+      {/* Scope Filter Tabs */}
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setViewScope('MY')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+              viewScope === 'MY'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Materi Saya ({myMaterialsList.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewScope('ALL')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+              viewScope === 'ALL'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Semua Materi Sekolah ({materials.length})
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-500 font-medium">
+          Menampilkan <strong className="text-slate-800">{teacherMaterials.length}</strong> bahan ajar tersimpan
+        </div>
       </div>
 
       {showForm && (
@@ -185,8 +266,8 @@ export default function TeacherMaterials() {
                     type="text"
                     value={formData.subjectId}
                     onChange={e => setFormData({...formData, subjectId: e.target.value})}
-                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs outline-none focus:border-indigo-500"
-                    placeholder="Contoh: Matematika"
+                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs text-slate-900 font-medium outline-none focus:border-cyan-500"
+                    placeholder="Contoh: Informatika"
                     required
                   />
                 </div>
@@ -211,7 +292,7 @@ export default function TeacherMaterials() {
                 <div className="flex-1">
                   <label className="text-xs font-medium text-slate-700 block mb-1.5">Tipe Materi</label>
                   <select 
-                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs" 
+                    className="w-full h-10 rounded-lg border border-slate-300 px-3 bg-white text-xs text-slate-900 font-medium outline-none focus:border-cyan-500" 
                     value={formData.type} 
                     onChange={e => setFormData({...formData, type: e.target.value as any})}
                   >
@@ -366,12 +447,41 @@ export default function TeacherMaterials() {
                   <p className="text-xs text-slate-500 line-clamp-2 mb-3">{mat.content}</p>
 
                   {/* Badge penugasan jika materi ini memiliki tugas */}
-                  {mat.hasAssignment && (
-                    <div className="p-2 rounded-lg bg-amber-50 border border-amber-200/80 text-[11px] text-amber-900 flex items-center gap-1.5 font-medium mb-3">
-                      <ClipboardList className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span className="truncate">Ada Tugas: {mat.assignmentTitle || 'Penugasan Siswa'}</span>
-                    </div>
-                  )}
+                  {mat.hasAssignment && (() => {
+                    const matSubmissions = (assignments || []).filter(a => a.materialId === mat.id);
+                    const graded = matSubmissions.filter(a => a.grade !== undefined && a.grade !== null && a.grade !== '').length;
+                    const ungraded = matSubmissions.length - graded;
+
+                    return (
+                      <div className="p-3 rounded-xl bg-amber-50/90 border border-amber-200/90 text-xs mb-3 space-y-2">
+                        <div className="flex items-center justify-between text-amber-950 font-semibold gap-2">
+                          <div className="flex items-center gap-1.5 truncate">
+                            <ClipboardList className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span className="truncate">{mat.assignmentTitle || 'Penugasan Siswa'}</span>
+                          </div>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-900 shrink-0">
+                            {matSubmissions.length} Anak Mengumpulkan
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-1 border-t border-amber-200/60 text-[11px]">
+                          <span className="text-slate-600">
+                            {ungraded > 0 ? (
+                              <strong className="text-rose-600 font-bold">{ungraded} menunggu nilai</strong>
+                            ) : (
+                              <span className="text-emerald-700 font-medium">Semua telah dinilai</span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/teacher/assignments?materialId=${mat.id}`)}
+                            className="inline-flex items-center gap-1 text-indigo-700 hover:text-indigo-900 font-bold text-xs hover:underline cursor-pointer shrink-0"
+                          >
+                            Periksa Tugas Anak <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
                 
                 <div className="flex gap-2 mt-auto pt-4 border-t border-slate-100">
@@ -387,8 +497,34 @@ export default function TeacherMaterials() {
           );
         })}
         {teacherMaterials.length === 0 && (
-          <div className="col-span-full p-12 text-center border-2 border-dashed border-slate-200 rounded-xl text-slate-500">
-            Belum ada materi pembelajaran yang ditambahkan.
+          <div className="col-span-full p-12 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50 space-y-3">
+            <BookOpen className="w-10 h-10 text-slate-400 mx-auto" />
+            <div className="text-sm font-bold text-slate-700">
+              {viewScope === 'MY' 
+                ? 'Belum ada materi pembelajaran yang dibuat untuk kelas/mapel Anda.'
+                : 'Belum ada materi pembelajaran tersimpan di server.'}
+            </div>
+            {viewScope === 'MY' && materials.length > 0 && (
+              <p className="text-xs text-slate-500">
+                Terdapat <strong>{materials.length} materi</strong> di bank materi sekolah.
+                <button
+                  type="button"
+                  onClick={() => setViewScope('ALL')}
+                  className="ml-1 text-indigo-600 font-bold underline cursor-pointer"
+                >
+                  Tampilkan Semua Materi
+                </button>
+              </p>
+            )}
+            <div className="pt-2">
+              <Button
+                size="sm"
+                onClick={() => setShowForm(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" /> Tambah Materi Pertama
+              </Button>
+            </div>
           </div>
         )}
       </div>

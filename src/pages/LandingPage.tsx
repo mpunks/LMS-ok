@@ -18,7 +18,7 @@ export default function LandingPage() {
             <span>SmartLMS</span>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
-            <PWAInstallButton variant="pill" className="hidden sm:inline-flex" />
+            <PWAInstallButton variant="dual" className="hidden sm:inline-flex" />
             <Button variant="ghost" onClick={() => navigate('/login')}>Masuk</Button>
             <Button onClick={() => navigate('/login')}>Mulai Belajar</Button>
           </div>
@@ -53,8 +53,9 @@ export default function LandingPage() {
             </Button>
           </div>
 
-          <div className="flex justify-center">
-            <PWAInstallButton variant="pill" />
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-2 mt-2">
+            <span className="text-xs text-slate-500 font-medium">Pasang Aplikasi Resmi:</span>
+            <PWAInstallButton variant="dual" />
           </div>
         </motion.div>
       </section>

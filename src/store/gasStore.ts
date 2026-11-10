@@ -83,10 +83,35 @@ export const useGasStore = create<GasState>()(
           return { success: false, error: 'Webhook URL belum dikonfigurasi' };
         }
         
-        // 1. Try direct fetch
+        // 1. Prioritize server proxy (/api/gas-proxy) to bypass browser CORS and 302 redirect issues instantly
+        try {
+          const proxyRes = await fetch('/api/gas-proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              webhookUrl: cleanUrl,
+              payload: { action, ...payload }
+            })
+          });
+
+          if (proxyRes.ok) {
+            const proxyData = await proxyRes.json();
+            if (proxyData && proxyData.success) {
+              set({ isConnected: true });
+              recordSyncResult(true, proxyData.message || `Aksi ${action} berhasil`);
+            } else {
+              recordSyncResult(false, proxyData?.error || `Aksi ${action} gagal`);
+            }
+            return proxyData;
+          }
+        } catch (proxyErr: any) {
+          console.warn('Proxy request notice:', proxyErr?.message || proxyErr);
+        }
+
+        // 2. Direct fetch fallback with fast 4-second timeout if offline
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 25000);
+          const timeoutId = setTimeout(() => controller.abort(), 4000);
 
           const response = await fetch(cleanUrl, {
             method: 'POST',
@@ -112,31 +137,6 @@ export const useGasStore = create<GasState>()(
           }
         } catch (error: any) {
           console.warn(`Direct GAS fetch notice (${action}):`, error?.message || error);
-        }
-
-        // 2. Fallback to server proxy (/api/gas-proxy)
-        try {
-          const proxyRes = await fetch('/api/gas-proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              webhookUrl: cleanUrl,
-              payload: { action, ...payload }
-            })
-          });
-
-          if (proxyRes.ok) {
-            const proxyData = await proxyRes.json();
-            if (proxyData && proxyData.success) {
-              set({ isConnected: true });
-              recordSyncResult(true, proxyData.message || `Aksi ${action} berhasil`);
-            } else {
-              recordSyncResult(false, proxyData?.error || `Aksi ${action} gagal`);
-            }
-            return proxyData;
-          }
-        } catch (proxyErr: any) {
-          console.warn('Proxy fallback error:', proxyErr);
         }
 
         const fallbackMsg = 'Gagal menghubungi server Google Apps Script. Periksa koneksi internet atau status Webhook.';
